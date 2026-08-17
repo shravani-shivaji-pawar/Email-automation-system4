@@ -181,13 +181,17 @@ def check_bounces(imap_host=None, imap_user=None, imap_pass=None):
                 print(f"❌ Cannot open {folder}: {e}")
                 continue
 
-            # Fetch recent unread emails (no FROM filter to catch all potential bounces)
-            for msg in mailbox.fetch("UNSEEN", limit=100):
+            # Fetch recent emails (no FROM filter to catch all potential bounces, reverse=True gets newest first)
+            for msg in mailbox.fetch(limit=100, reverse=True):
 
                 try:
                     # skip old mails
-                    if not msg.date or msg.date < cutoff:
+                    if not msg.date:
                         continue
+                    if msg.date < cutoff:
+                        # Since we fetch in reverse chronological order, once we see a message
+                        # older than the cutoff, all subsequent messages will also be older.
+                        break
 
                     subject = (msg.subject or "").lower()
                     body = (msg.text or msg.html or "").lower()

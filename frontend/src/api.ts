@@ -1,8 +1,18 @@
 import axios from 'axios';
 
-const API_BASE =
-  import.meta.env.VITE_API_URL ||
-  "https://email-automation-system2.onrender.com/api";
+const getApiBase = () => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  if (typeof window !== 'undefined') {
+    const { hostname } = window.location;
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:8000/api';
+    }
+  }
+  return "https://email-automation-system2.onrender.com/api";
+};
+const API_BASE = getApiBase();
 const api = axios.create({
   baseURL: API_BASE,
   timeout: 120000,  // 120 seconds for complex queries

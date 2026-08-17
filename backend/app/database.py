@@ -294,6 +294,29 @@ def get_sender_by_id(sender_id):
     return None
 
 
+def get_sender_by_email(email):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM senders WHERE email = ?", (email.strip(),))
+        row = cursor.fetchone()
+
+    if row:
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "name": row[2],
+            "organization_name": row[3],
+            "email": row[4],
+            "password": row[5],
+            "smtp_host": row[6] if len(row) > 6 else "smtp.gmail.com",
+            "smtp_port": row[7] if len(row) > 7 else 465,
+            "smtp_use_tls": bool(row[8]) if len(row) > 8 else True,
+            "smtp2go_api_key": row[9] if len(row) > 9 else None,
+            "verified": bool(row[10]) if len(row) > 10 else False,
+        }
+    return None
+
+
 # =========================
 # GMAIL OAUTH TOKENS TABLE
 # =========================

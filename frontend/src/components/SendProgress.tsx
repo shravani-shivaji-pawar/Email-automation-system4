@@ -60,7 +60,7 @@ const SendProgress: React.FC<SendProgressProps> = ({ status }) => {
         <p className="mt-3 text-xs text-slate-500">Currently sending to: <span className="font-mono">{progress.current_email}</span></p>
       )}
 
-      {jobs.filter(j => j.in_progress).map(job => (
+      {jobs.map(job => (
         <motion.div key={job.job_id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
           className="mt-4 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/50 dark:border-slate-700/50"
         >
@@ -69,12 +69,19 @@ const SendProgress: React.FC<SendProgressProps> = ({ status }) => {
               <p className="font-medium text-sm text-slate-900 dark:text-white">{job.from_email}</p>
               <p className="text-xs text-slate-500">{job.subject}</p>
             </div>
-            <span className="px-2 py-1 text-[10px] font-medium bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-full">Active</span>
+            <span className={`px-2 py-1 text-[10px] font-medium rounded-full ${
+              job.in_progress
+                ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'
+                : 'bg-slate-100 dark:bg-slate-800/30 text-slate-750 dark:text-slate-400'
+            }`}>
+              {job.in_progress ? 'Active' : 'Completed'}
+            </span>
           </div>
           <div className="flex gap-4 text-xs text-slate-500">
             <span>{job.processed}/{job.total} processed</span>
             <span className="text-emerald-600">{job.delivered} sent</span>
             {job.failed > 0 && <span className="text-rose-600">{job.failed} failed</span>}
+            {(job.bounced || 0) > 0 && <span className="text-amber-600">{job.bounced} bounced</span>}
           </div>
         </motion.div>
       ))}

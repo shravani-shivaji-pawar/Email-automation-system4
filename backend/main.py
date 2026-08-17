@@ -123,6 +123,7 @@ from app.database import (
     add_sender,
     get_senders,
     get_sender_by_id,
+    get_sender_by_email,
     create_gmail_tokens_table,
     save_gmail_token,
     get_gmail_token,
@@ -319,6 +320,22 @@ def _to_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _get_current_session_sender_email() -> str:
+    # 1. Check if active_sender is set in state
+    active = state.get("active_sender")
+    if isinstance(active, dict) and active.get("email"):
+        return active["email"].strip().lower()
+    # 2. Check current_user in state
+    user = state.get("current_user")
+    if isinstance(user, dict) and user.get("email"):
+        return user["email"].strip().lower()
+    # 3. Fallback to SMTP_USER env variable
+    env_user = os.getenv("SMTP_USER", "").strip().lower()
+    if env_user:
+        return env_user
+    raise HTTPException(status_code=400, detail="No logged-in user or active sender email found.")
+
+
 def _active_mail_credentials() -> tuple[str, str]:
     active = state.get("active_sender")
     if active and active.get("email") and active.get("password"):
@@ -328,6 +345,268 @@ def _active_mail_credentials() -> tuple[str, str]:
     if env_user and env_pass:
         return env_user, env_pass
     raise HTTPException(status_code=400, detail="No active sender credentials found for email insights.")
+
+
+def _fetch_inbox_snippets_gmail(
+    sender_email: str,
+    max_emails: int,
+    include_body: bool = True,
+    unread_only: bool = False,
+) -> list[dict[str, Any]]:
+    """
+    Fetch inbox emails using Gmail API for connected Google Accounts.
+    """
+    import base64
+    from datetime import datetime, timezone
+    from googleapiclient.discovery import build
+    from app.gmail_service import _build_credentials
+
+    snippets: list[dict[str, Any]] = []
+    try:
+        creds = _build_credentials(sender_email)
+        service = build("gmail", "v1", credentials=creds)
+
+        q = "label:INBOX"
+        if unread_only:
+            q += " label:UNREAD"
+
+        limit = max_emails if max_emails > 0 else 50
+        results = service.users().messages().list(userId="me", q=q, maxResults=limit).execute()
+        messages = results.get("messages", [])
+
+        for m in messages:
+            try:
+                msg = service.users().messages().get(userId="me", id=m["id"], format="full").execute()
+                internal_date = int(msg.get("internalDate", 0))
+                dt = datetime.fromtimestamp(internal_date / 1000.0, timezone.utc)
+
+                payload = msg.get("payload", {})
+                headers = payload.get("headers", [])
+
+                subject = next((h["value"] for h in headers if h["name"].lower() == "subject"), "")
+                from_header = next((h["value"] for h in headers if h["name"].lower() == "from"), "")
+                seen = "UNREAD" not in msg.get("labelIds", [])
+
+                body = ""
+                if include_body:
+                    def get_text_recursive(part) -> str:
+                        mime = part.get("mimeType", "")
+                        data = part.get("body", {}).get("data", "")
+                        text_content = ""
+                        if data:
+                            try:
+                                text_content += base64.urlsafe_b64decode(data.encode()).decode(errors="ignore")
+                            except Exception:
+                                pass
+                        if "parts" in part:
+                            for p in part["parts"]:
+                                text_content += "\n" + get_text_recursive(p)
+                        return text_content
+
+                    body = get_text_recursive(payload)
+                    if len(body) > FAST_BODY_CHAR_LIMIT:
+                        body = body[:FAST_BODY_CHAR_LIMIT] + "...(truncated)"
+
+                snippets.append({
+                    "uid": m["id"],
+                    "date": dt.isoformat(),
+                    "from": from_header,
+                    "sender_email": _extract_sender_email(from_header),
+                    "subject": subject,
+                    "body": body,
+                    "seen": seen,
+                    "flags": [] if seen else ["\\Unseen"],
+                })
+            except Exception as e:
+                print(f"Error fetching Gmail message {m.get('id')}: {e}")
+                continue
+
+    except Exception as e:
+        print(f"Gmail API fetch error: {e}")
+
+    return snippets
+
+
+def _gmail_fetch_full_email(sender_email: str, uid: str) -> dict[str, Any]:
+    import base64
+    from googleapiclient.discovery import build
+    from app.gmail_service import _build_credentials
+
+    try:
+        creds = _build_credentials(sender_email)
+        service = build("gmail", "v1", credentials=creds)
+        msg = service.users().messages().get(userId="me", id=uid, format="full").execute()
+        payload = msg.get("payload", {})
+
+        def get_text_recursive(part) -> str:
+            mime = part.get("mimeType", "")
+            data = part.get("body", {}).get("data", "")
+            text_content = ""
+            if data:
+                try:
+                    text_content += base64.urlsafe_b64decode(data.encode()).decode(errors="ignore")
+                except Exception:
+                    pass
+            if "parts" in part:
+                for p in part["parts"]:
+                    text_content += "\n" + get_text_recursive(p)
+            return text_content
+
+        body = get_text_recursive(payload)
+        max_chars = int(os.getenv("FULL_EMAIL_MAX_CHARS", "20000"))
+        if len(body) > max_chars:
+            body = body[:max_chars] + "\n...(truncated)"
+        return {"uid": uid, "body": body}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch Gmail message: {e}")
+
+
+def _apply_email_action_gmail(sender_email: str, action: str, uid: str) -> dict[str, Any]:
+    import re
+    import base64
+    from googleapiclient.discovery import build
+    from app.gmail_service import _build_credentials
+
+    creds = _build_credentials(sender_email)
+    service = build("gmail", "v1", credentials=creds)
+    action = action.strip().lower()
+
+    if action == "mark_read":
+        service.users().messages().modify(userId="me", id=uid, body={"removeLabelIds": ["UNREAD"]}).execute()
+        return {"success": True, "message": "Email marked as read.", "uid": uid, "action": action}
+    elif action == "mark_unread":
+        service.users().messages().modify(userId="me", id=uid, body={"addLabelIds": ["UNREAD"]}).execute()
+        return {"success": True, "message": "Email marked as unread.", "uid": uid, "action": action}
+    elif action == "mark_important":
+        service.users().messages().modify(userId="me", id=uid, body={"addLabelIds": ["STARRED"]}).execute()
+        return {"success": True, "message": "Email marked as important.", "uid": uid, "action": action}
+    elif action == "move_to_trash":
+        service.users().messages().trash(userId="me", id=uid).execute()
+        return {"success": True, "message": "Email moved to trash.", "uid": uid, "action": action}
+    elif action == "move_to_spam":
+        service.users().messages().modify(userId="me", id=uid, body={"removeLabelIds": ["INBOX"], "addLabelIds": ["SPAM"]}).execute()
+        return {"success": True, "message": "Email moved to spam.", "uid": uid, "action": action}
+    elif action == "unsubscribe":
+        msg = service.users().messages().get(userId="me", id=uid, format="full").execute()
+        payload = msg.get("payload", {})
+        def get_text_recursive(part) -> str:
+            mime = part.get("mimeType", "")
+            data = part.get("body", {}).get("data", "")
+            text_content = ""
+            if data:
+                try:
+                    text_content += base64.urlsafe_b64decode(data.encode()).decode(errors="ignore")
+                except Exception:
+                    pass
+            if "parts" in part:
+                for p in part["parts"]:
+                    text_content += "\n" + get_text_recursive(p)
+            return text_content
+        body = get_text_recursive(payload)
+        links = re.findall(r"https?://[^\s\"'<>]+", body, flags=re.IGNORECASE)
+        unsub_links = [u for u in links if "unsubscribe" in u.lower()]
+        if not unsub_links:
+            return {
+                "success": True,
+                "message": "No explicit unsubscribe link found in this email body.",
+                "uid": uid,
+                "action": action,
+            }
+        return {
+            "success": True,
+            "message": "Potential unsubscribe links detected.",
+            "uid": uid,
+            "action": action,
+            "unsubscribe_links": unsub_links[:5],
+        }
+    raise HTTPException(status_code=400, detail="Unsupported action.")
+
+
+def _apply_email_action_bulk_gmail(sender_email: str, action: str, uids: list[str]) -> dict[str, Any]:
+    from googleapiclient.discovery import build
+    from app.gmail_service import _build_credentials
+
+    creds = _build_credentials(sender_email)
+    service = build("gmail", "v1", credentials=creds)
+    action = action.strip().lower()
+
+    body = {}
+    if action == "mark_read":
+        body = {"ids": uids, "removeLabelIds": ["UNREAD"]}
+    elif action == "mark_unread":
+        body = {"ids": uids, "addLabelIds": ["UNREAD"]}
+    elif action == "mark_important":
+        body = {"ids": uids, "addLabelIds": ["STARRED"]}
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported bulk action: {action}")
+
+    service.users().messages().batchModify(userId="me", body=body).execute()
+    return {
+        "success": True,
+        "action": action,
+        "requested": len(uids),
+        "updated": len(uids),
+        "failed": [],
+    }
+
+
+def _fetch_emails_by_date_range_gmail(
+    sender_email: str,
+    start: datetime | None,
+    end: datetime | None,
+    max_emails: int,
+) -> list[dict[str, Any]]:
+    import base64
+    from datetime import datetime, timezone
+    from googleapiclient.discovery import build
+    from app.gmail_service import _build_credentials
+
+    snippets: list[dict[str, Any]] = []
+    try:
+        creds = _build_credentials(sender_email)
+        service = build("gmail", "v1", credentials=creds)
+
+        q = "label:INBOX"
+        if start:
+            q += f" after:{start.strftime('%Y/%m/%d')}"
+        if end:
+            q += f" before:{end.strftime('%Y/%m/%d')}"
+
+        limit = max_emails if max_emails > 0 else 50
+        results = service.users().messages().list(userId="me", q=q, maxResults=limit).execute()
+        messages = results.get("messages", [])
+
+        for m in messages:
+            try:
+                msg = service.users().messages().get(userId="me", id=m["id"], format="full").execute()
+                internal_date = int(msg.get("internalDate", 0))
+                dt = datetime.fromtimestamp(internal_date / 1000.0, timezone.utc)
+
+                payload = msg.get("payload", {})
+                headers = payload.get("headers", [])
+
+                subject = next((h["value"] for h in headers if h["name"].lower() == "subject"), "")
+                from_header = next((h["value"] for h in headers if h["name"].lower() == "from"), "")
+                seen = "UNREAD" not in msg.get("labelIds", [])
+
+                snippets.append({
+                    "uid": m["id"],
+                    "date": dt.isoformat(),
+                    "from": from_header,
+                    "sender_email": _extract_sender_email(from_header),
+                    "subject": subject,
+                    "body": "",
+                    "seen": seen,
+                    "flags": [] if seen else ["\\Unseen"],
+                })
+            except Exception as e:
+                print(f"Error fetching Gmail message {m.get('id')}: {e}")
+                continue
+
+    except Exception as e:
+        print(f"Gmail API date range fetch error: {e}")
+
+    return snippets
 
 
 def _extract_sender_email(raw_from: str) -> str:
@@ -1171,6 +1450,38 @@ def _fetch_inbox_snippets(
     from email.utils import parsedate_to_datetime
     from email.parser import BytesParser
 
+    sender_email = _get_current_session_sender_email()
+    if is_gmail_connected(sender_email):
+        # Cache key for in-memory cache (fallback)
+        cache_key = (
+            sender_email,
+            "gmail_api",
+            start.isoformat() if start else "",
+            end.isoformat() if end else "",
+            int(max_emails),
+            bool(include_body),
+            bool(unread_only),
+        )
+        now = time.time()
+        inbox_cache = state.setdefault("inbox_cache", {})
+        if not bypass_cache and isinstance(inbox_cache, dict):
+            cached = inbox_cache.get(cache_key)
+            if isinstance(cached, dict) and (now - float(cached.get("at", 0))) <= INBOX_CACHE_TTL_S:
+                snippets = cached.get("snippets")
+                if isinstance(snippets, list):
+                    print(f"📬 Cache hit (Gmail API): returning {len(snippets)} cached emails")
+                    return snippets
+
+        snippets = _fetch_inbox_snippets_gmail(sender_email, max_emails, include_body, unread_only)
+        
+        # Cache the results
+        if isinstance(inbox_cache, dict):
+            inbox_cache[cache_key] = {"at": now, "snippets": snippets}
+        # Store in Redis for future requests (if not date filtered)
+        if not start and not end and snippets:
+            _set_cached_emails(sender_email, snippets)
+        return snippets
+
     imap_host = os.getenv("IMAP_HOST", "imap.gmail.com").strip() or "imap.gmail.com"
     imap_user, imap_pass = _active_mail_credentials()
     sender_email = (imap_user or "").strip().lower()
@@ -1475,6 +1786,11 @@ def _imap_fetch_full_email(uid: str) -> dict[str, Any]:
     uid = (uid or "").strip()
     if not uid:
         raise HTTPException(status_code=400, detail="UID required")
+    
+    sender_email = _get_current_session_sender_email()
+    if is_gmail_connected(sender_email):
+        return _gmail_fetch_full_email(sender_email, uid)
+
     client, _ = _imap_login_raw()
     try:
         client.select("INBOX")
@@ -1621,7 +1937,7 @@ def email_insights_query(payload: PromptQueryRequest):
 
     intent = _detect_intent(payload.question)
     start, end = _extract_date_range_from_question(payload.question)
-    sender_email, _ = _active_mail_credentials()
+    sender_email = _get_current_session_sender_email()
     cache_key = "|".join(
         [
             sender_email.lower().strip(),
@@ -1724,7 +2040,7 @@ def email_insights_index(limit: int = 200, mode: str = "headers"):
     """
     Build/refresh the vector index for the active sender.
     """
-    sender_email, _ = _active_mail_credentials()
+    sender_email = _get_current_session_sender_email()
     capped = max(20, min(int(limit), 1500))
     include_body = (mode or "").strip().lower() in {"full", "body", "all"}
     snippets = _fetch_inbox_snippets(None, None, capped, include_body=include_body, unread_only=False)
@@ -1763,7 +2079,7 @@ def email_insights_index(limit: int = 200, mode: str = "headers"):
 
 @app.get("/api/email-insights/search")
 def email_insights_search(q: str, top_k: int = 12):
-    sender_email, _ = _active_mail_credentials()
+    sender_email = _get_current_session_sender_email()
     hits = semantic_search(_db(), sender_email=sender_email, query=q, top_k=max(1, min(int(top_k), 40)))
     return {
         "success": True,
@@ -1775,7 +2091,7 @@ def email_insights_search(q: str, top_k: int = 12):
 
 @app.get("/api/chat/history")
 def chat_history(user_id: int, limit: int = 40):
-    sender_email, _ = _active_mail_credentials()
+    sender_email = _get_current_session_sender_email()
     history = get_chat_history(
         _db(),
         user_id=int(user_id),
@@ -1787,7 +2103,7 @@ def chat_history(user_id: int, limit: int = 40):
 
 @app.post("/api/chat/turn")
 def chat_add_turn(payload: ChatTurnRequest):
-    sender_email, _ = _active_mail_credentials()
+    sender_email = _get_current_session_sender_email()
     role = (payload.role or "").strip().lower()
     if role not in {"user", "assistant"}:
         raise HTTPException(status_code=400, detail="role must be user or assistant")
@@ -1854,6 +2170,10 @@ def _fetch_emails_by_date_range(
     """Efficient date-range scan using IMAP SEARCH command."""
     import imaplib
     from email.utils import parsedate_to_datetime
+
+    sender_email = _get_current_session_sender_email()
+    if is_gmail_connected(sender_email):
+        return _fetch_emails_by_date_range_gmail(sender_email, start, end, max_emails)
 
     imap_host = os.getenv("IMAP_HOST", "imap.gmail.com").strip() or "imap.gmail.com"
     imap_user, imap_pass = _active_mail_credentials()
@@ -2055,6 +2375,10 @@ def _apply_email_action(action: str, uid: str) -> dict[str, Any]:
     if not uid:
         raise HTTPException(status_code=400, detail="UID is required for this action.")
 
+    sender_email = _get_current_session_sender_email()
+    if is_gmail_connected(sender_email):
+        return _apply_email_action_gmail(sender_email, action, uid)
+
     if action == "unsubscribe":
         snippets = _fetch_inbox_snippets(None, None, 60, include_body=True, unread_only=False)
         target = next((s for s in snippets if s.get("uid") == uid), None)
@@ -2140,6 +2464,10 @@ def email_insights_action_bulk(payload: EmailBulkActionRequest):
     if action not in allowed:
         raise HTTPException(status_code=400, detail=f"Unsupported bulk action: {action}")
 
+    sender_email = _get_current_session_sender_email()
+    if is_gmail_connected(sender_email):
+        return _apply_email_action_bulk_gmail(sender_email, action, uids)
+
     client, _ = _imap_login_raw()
     ok = 0
     failed: list[str] = []
@@ -2175,7 +2503,7 @@ def email_insights_action_bulk(payload: EmailBulkActionRequest):
 
 @app.get("/api/email/uid/{uid}")
 def email_get_by_uid(uid: str):
-    sender_email, _ = _active_mail_credentials()
+    sender_email = _get_current_session_sender_email()
     full = _imap_fetch_full_email(uid)
     full["success"] = True
     full["sender_email"] = sender_email
@@ -2186,7 +2514,7 @@ def email_get_by_uid(uid: str):
 def refresh_email_cache():
     """Manually refresh the email cache"""
     try:
-        sender_email, _ = _active_mail_credentials()
+        sender_email = _get_current_session_sender_email()
         _invalidate_cache(sender_email)
         return {"success": True, "message": "Cache cleared. Next prompt will fetch fresh emails."}
     except Exception as e:
@@ -2312,13 +2640,8 @@ def register(data: dict):
         raise HTTPException(400, "Phone must be 10 digits")
 
     if role == "individual":
-        if not re.fullmatch(r"[a-z]{16}", app_password):
-            raise HTTPException(
-                400,
-                "App password must be exactly 16 lowercase letters"
-            )
-        # Keep login flow same: individual can log in using app password.
-        password = app_password
+        if len(password) < 6:
+            raise HTTPException(400, "Password must be at least 6 characters")
     else:
         if len(password) < 6:
             raise HTTPException(400, "Password must be at least 6 characters")
@@ -2329,7 +2652,7 @@ def register(data: dict):
         phone,
         password,
         role,
-        app_password if role == "individual" else None,
+        None,
         domain,  # NEW: persists the extracted domain for organization accounts
     )
 
@@ -2895,12 +3218,16 @@ def _send_worker_job(job_id: str, subject: str, message_template: str, snapshot:
 
     try:
 
-        # only recent bounce emails
-        bounces = check_bounces(
-            imap_host=os.getenv("IMAP_HOST", "imap.gmail.com"),
-            imap_user=from_addr,
-            imap_pass=sender_snap.get("password") if sender_snap else None,
-        )
+        if is_gmail_connected(from_addr):
+            from app.gmail_service import check_bounces_gmail
+            bounces = check_bounces_gmail(from_addr)
+        else:
+            # only recent bounce emails
+            bounces = check_bounces(
+                imap_host=os.getenv("IMAP_HOST", "imap.gmail.com"),
+                imap_user=from_addr,
+                imap_pass=sender_snap.get("password") if sender_snap else None,
+            )
 
         print("\n📥 Raw bounce results:")
         print(bounces)
@@ -3114,7 +3441,7 @@ async def ai_agent_status() -> dict[str, object]:
     smtp = load_smtp_settings()
 
     has_sender = bool(
-        (isinstance(active, dict) and active.get("email") and active.get("password"))
+        (isinstance(active, dict) and active.get("email") and (active.get("password") or is_gmail_connected(active["email"])))
         or (smtp is not None)
     )
 
@@ -3133,8 +3460,116 @@ async def ai_agent_status() -> dict[str, object]:
     }
 
 
+_last_bounce_sync_time = 0.0
+
+def _sync_recent_bounces():
+    global _last_bounce_sync_time
+    import time
+    from datetime import datetime, timezone
+    
+    now = time.time()
+    # Only sync at most once every 15 seconds to prevent rate limits
+    if now - _last_bounce_sync_time < 15:
+        return
+    _last_bounce_sync_time = now
+    
+    # Find all sender emails used in the last 30 minutes
+    senders_to_check = set()
+    now_dt = datetime.now(timezone.utc)
+    
+    last_batch = state.get("last_batch")
+    if last_batch:
+        try:
+            at_dt = datetime.fromisoformat(last_batch.get("at"))
+            if (now_dt - at_dt).total_seconds() < 1800:
+                senders_to_check.add(last_batch.get("from_email"))
+        except Exception:
+            pass
+            
+    for jid, job in state.get("send_jobs", {}).items():
+        started = job.get("started_at")
+        if started and (time.time() - started) < 1800:
+            senders_to_check.add(job.get("from_email"))
+            
+    if not senders_to_check:
+        return
+        
+    for from_email in senders_to_check:
+        if not from_email:
+            continue
+        try:
+            if is_gmail_connected(from_email):
+                from app.gmail_service import check_bounces_gmail
+                bounces = check_bounces_gmail(from_email)
+            else:
+                # Resolve password dynamically from database
+                password = None
+                imap_host = os.getenv("IMAP_HOST", "imap.gmail.com")
+                
+                snd = get_sender_by_email(from_email)
+                if snd:
+                    password = snd.get("password")
+                else:
+                    usr = get_user_by_email(from_email)
+                    if usr:
+                        password = usr.get("app_password") or usr.get("password")
+                        
+                if not password:
+                    password = os.getenv("SMTP_PASSWORD")
+
+                bounces = check_bounces(
+                    imap_host=imap_host,
+                    imap_user=from_email,
+                    imap_pass=password,
+                )
+                
+            bounced_emails = {str(b.get("email", "")).lower().strip() for b in (bounces or []) if b.get("email")}
+            if not bounced_emails:
+                continue
+                
+            # Update last_batch
+            if last_batch and last_batch.get("from_email") == from_email:
+                updated = False
+                for r in last_batch.get("results", []):
+                    em = str(r.get("email") or "").lower().strip()
+                    if em in bounced_emails and r.get("status") != "bounced":
+                        r["status"] = "bounced"
+                        r["detail"] = "Email bounced (invalid/rejected recipient)"
+                        updated = True
+                if updated:
+                    last_batch["delivered"] = sum(1 for r in last_batch["results"] if r.get("status") == "delivered")
+                    last_batch["failed"] = sum(1 for r in last_batch["results"] if r.get("status") == "failed")
+                    last_batch["bounced"] = sum(1 for r in last_batch["results"] if r.get("status") == "bounced")
+                    last_batch["bounced_emails"] = sorted(list(set(last_batch.get("bounced_emails", []) + list(bounced_emails))))
+                    state["last_batch"] = last_batch
+
+            # Update send_jobs
+            with _send_jobs_lock:
+                for jid, job in state.get("send_jobs", {}).items():
+                    if job.get("from_email") == from_email:
+                        p = job.get("progress") or {}
+                        updated = False
+                        for r in p.get("results", []):
+                            em = str(r.get("email") or "").lower().strip()
+                            if em in bounced_emails and r.get("status") != "bounced":
+                                current_status = str(r.get("status") or "").lower()
+                                r["status"] = "bounced"
+                                r["detail"] = "Email bounced (invalid/rejected recipient)"
+                                p["bounced"] = int(p.get("bounced") or 0) + 1
+                                if current_status == "delivered":
+                                    p["delivered"] = max(int(p.get("delivered") or 0) - 1, 0)
+                                elif current_status == "failed":
+                                    p["failed"] = max(int(p.get("failed") or 0) - 1, 0)
+                                updated = True
+                        if updated:
+                            job["progress"] = p
+                            state["send_jobs"][jid] = job
+        except Exception as e:
+            logger.error(f"Error syncing bounces for {from_email}: {e}")
+
 @app.get("/api/send-status")
 async def send_status() -> dict[str, object]:
+    _sync_recent_bounces()
     bundle = _refresh_legacy_send_aggregate()
 
     smtp = load_smtp_settings()
@@ -3410,13 +3845,29 @@ def manual_list_all():
 # ════════════════════════════════════════════
 
 @app.get("/google/login")
-def google_login(user_email: str):
+def google_login(request: Request, user_email: str):
     """
     Step 1: Redirect the logged-in user to Google's consent screen.
     `user_email` is embedded in a signed, stateless `state` param -
     no server-side storage needed (works across reloads/workers).
     """
-    auth_url, _ = get_auth_url(user_email, GOOGLE_REDIRECT_URI)
+    frontend_url = request.query_params.get("frontend_url")
+    if not frontend_url:
+        referer = request.headers.get("referer", "")
+        if referer:
+            from urllib.parse import urlparse
+            parsed = urlparse(referer)
+            frontend_url = f"{parsed.scheme}://{parsed.netloc}"
+        else:
+            frontend_url = FRONTEND_URL
+
+    host = request.headers.get("host", "")
+    if "localhost" in host or "127.0.0.1" in host:
+        redirect_uri = f"http://{host}/google/callback"
+    else:
+        redirect_uri = GOOGLE_REDIRECT_URI
+
+    auth_url, _ = get_auth_url(user_email, redirect_uri, frontend_url)
     return {"auth_url": auth_url}
 
 
@@ -3430,23 +3881,42 @@ def google_callback(request: Request):
     oauth_state = request.query_params.get("state")
     error = request.query_params.get("error")
 
+    frontend_url = FRONTEND_URL
+    user_email = None
+    role = "individual"
+
+    if oauth_state:
+        try:
+            from app.auth_google import verify_state_dict
+            payload = verify_state_dict(oauth_state)
+            user_email = payload["u"]
+            frontend_url = payload.get("f") or FRONTEND_URL
+            user = get_user_by_email(user_email)
+            if user:
+                role = user.get("role", "individual")
+        except Exception as e:
+            logger.error(f"Error decoding OAuth state: {e}")
+
+    redirect_path = "/dashboard" if role == "individual" else "/settings"
+
     if error:
-        return RedirectResponse(f"{FRONTEND_URL}/settings?gmail_connected=0&error={error}")
+        return RedirectResponse(f"{frontend_url}{redirect_path}?gmail_connected=0&error={error}")
 
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
 
-    try:
-        user_email = verify_state(oauth_state)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid or expired OAuth state: {e}")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="Invalid OAuth state: no email found")
 
-    credentials = fetch_tokens(code, GOOGLE_REDIRECT_URI)
+    host = request.headers.get("host", "")
+    if "localhost" in host or "127.0.0.1" in host:
+        redirect_uri = f"http://{host}/google/callback"
+    else:
+        redirect_uri = GOOGLE_REDIRECT_URI
+
+    credentials = fetch_tokens(code, redirect_uri)
 
     if not credentials.refresh_token:
-        # Happens if the user already granted consent before and Google
-        # didn't re-issue a refresh_token. save_gmail_token() preserves
-        # the existing one in that case.
         logger.warning(f"No refresh_token returned for {user_email}; reusing existing if present")
 
     save_gmail_token(
@@ -3456,8 +3926,7 @@ def google_callback(request: Request):
         token_expiry=credentials.expiry,
     )
 
-    # Redirect back to frontend settings page
-    return RedirectResponse(f"{FRONTEND_URL}/settings?gmail_connected=1")
+    return RedirectResponse(f"{frontend_url}{redirect_path}?gmail_connected=1")
 
 
 @app.get("/google/status")

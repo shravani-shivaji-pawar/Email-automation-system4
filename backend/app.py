@@ -223,16 +223,7 @@ def auth_ui():
         email = st.text_input("Email", key="reg_email")
         phone = st.text_input("Phone", key="reg_phone")
         role = st.radio("Account Type", ["individual", "organizational"], horizontal=True)
-        password = ""
-        app_password = ""
-
-        if role == "individual":
-            st.info("For individual account, use Gmail App Password for sending emails.")
-            st.markdown("[Generate App Password](https://myaccount.google.com/apppasswords)")
-            st.markdown("[How to generate App Password (YouTube)](https://www.youtube.com/results?search_query=gmail+app+password+generate)")
-            app_password = st.text_input("App Password", type="password", key="reg_app_pass")
-        else:
-            password = st.text_input("Password", type="password", key="reg_pass")
+        password = st.text_input("Password", type="password", key="reg_pass")
 
         if st.button("Register", use_container_width=True):
             # ── ORGANIZATIONAL DOMAIN CHECK (UI-side early feedback) ─────────
@@ -265,10 +256,8 @@ def auth_ui():
                 )
             elif not phone.isdigit() or len(phone) != 10:
                 st.error("Phone must be 10 digits")
-            elif role == "organizational" and len(password) < 6:
+            elif len(password) < 6:
                 st.error("Password must be at least 6 characters")
-            elif role == "individual" and len(app_password.replace(" ", "")) != 16:
-                st.error("App password must be 16 letters")
             else:
                 try:
                     payload = {
@@ -278,8 +267,6 @@ def auth_ui():
                         "password": password,
                         "role": role,
                     }
-                    if role == "individual":
-                        payload["app_password"] = app_password
 
                     res = post_json(
                         "/api/register",

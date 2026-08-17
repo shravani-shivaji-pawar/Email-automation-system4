@@ -36,6 +36,7 @@ Thumbs.db
 # Database
 *.db
 *.sqlite
+database_backups/
 
 *.docx
 
@@ -44,3 +45,6 @@ nixpacks.toml  # optional — keep if you want to commit it
 
 # Logs
 *.log
+
+*.db-shm
+*.db-wal

@@ -65,15 +65,18 @@ def _sign(payload: str) -> str:
     return hmac.new(STATE_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def create_state(user_email: str) -> str:
-    payload = json.dumps({"u": user_email, "ts": int(time.time())})
+def create_state(user_email: str, frontend_url: str = None) -> str:
+    payload_dict = {"u": user_email, "ts": int(time.time())}
+    if frontend_url:
+        payload_dict["f"] = frontend_url
+    payload = json.dumps(payload_dict)
     payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode()
     sig = _sign(payload_b64)
     return f"{payload_b64}.{sig}"
 
 
-def verify_state(state: str, max_age_seconds: int = 600) -> str:
-    """Returns user_email if valid, raises ValueError otherwise."""
+def verify_state_dict(state: str, max_age_seconds: int = 600) -> dict:
+    """Returns the decoded payload dict if valid, raises ValueError otherwise."""
     try:
         payload_b64, sig = state.split(".", 1)
     except ValueError:
@@ -87,13 +90,19 @@ def verify_state(state: str, max_age_seconds: int = 600) -> str:
     if time.time() - payload["ts"] > max_age_seconds:
         raise ValueError("State expired")
 
+    return payload
+
+
+def verify_state(state: str, max_age_seconds: int = 600) -> str:
+    """Returns user_email if valid, raises ValueError otherwise."""
+    payload = verify_state_dict(state, max_age_seconds)
     return payload["u"]
 
 
-def get_auth_url(user_email: str, redirect_uri: str = None):
+def get_auth_url(user_email: str, redirect_uri: str = None, frontend_url: str = None):
     """Return authorization_url with a signed, stateless state param."""
     flow = get_flow(redirect_uri)
-    state = create_state(user_email)
+    state = create_state(user_email, frontend_url)
     authorization_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
