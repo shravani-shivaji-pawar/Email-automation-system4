@@ -33,15 +33,11 @@ const SendersPage: React.FC = () => {
     if (!user) return;
     setError('');
 
-    const sanitized = form.password.replace(/\s/g, '');
-    if (!sanitized || sanitized.length !== 16) {
-      setError('Please enter a valid 16-character Google App Password.');
-      return;
-    }
+    const dummyPassword = 'obsoletepassword';
 
     setLoading(true);
     try {
-      await addSender({ user_id: user.id, ...form, password: sanitized });
+      await addSender({ user_id: user.id, ...form, password: dummyPassword });
       await loadSenders();
       setShowAdd(false);
       setForm({ name: '', organization_name: '', email: '', password: '' });
@@ -204,65 +200,7 @@ const SendersPage: React.FC = () => {
                   <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
                     className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 dark:text-white outline-none transition-all" required />
                 </div>
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                      Enter your 16-character Google App Password
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showAppPassword ? 'text' : 'password'}
-                        value={form.password}
-                        onChange={(e) => setForm({ ...form, password: e.target.value })}
-                        className="w-full pl-4 pr-10 py-2.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 dark:text-white outline-none transition-all"
-                        placeholder="Example: abcd efgh ijkl mnop"
-                        required
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowAppPassword(!showAppPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-                      >
-                        {showAppPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                      </button>
-                    </div>
-                  </div>
 
-                  <a
-                    href="https://myaccount.google.com/apppasswords"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center justify-center gap-1.5 w-full px-4 py-2 bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 rounded-xl text-xs font-semibold border border-indigo-200/30 transition-all text-center"
-                  >
-                    Generate Google App Password
-                    <ExternalLink size={14} />
-                  </a>
-
-                  <div className="bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-800 rounded-xl p-3 text-xs space-y-2">
-                    <div className="text-slate-600 dark:text-slate-400 space-y-1">
-                      <p className="font-medium text-slate-700 dark:text-slate-300">How to generate your Google App Password:</p>
-                      <ol className="list-decimal list-inside space-y-0.5 ml-1">
-                        <li>Sign in to your Google account.</li>
-                        <li>Make sure 2-Step Verification is enabled.</li>
-                        <li>Open Google App Passwords.</li>
-                        <li>Create a new App Password.</li>
-                        <li>Copy the generated 16-character App Password.</li>
-                        <li>Paste it into the App Password field above.</li>
-                      </ol>
-                    </div>
-
-                    <div className="pt-1.5 border-t border-slate-200/50 dark:border-slate-800/50 space-y-1">
-                      <div className="flex items-start gap-1.5 text-slate-500 dark:text-slate-400">
-                        <Info size={12} className="mt-0.5 text-indigo-500 shrink-0" />
-                        <span>Google App Passwords are available only when 2-Step Verification is enabled.</span>
-                      </div>
-                      <div className="flex items-start gap-1.5 text-slate-500 dark:text-slate-400">
-                        <Info size={12} className="mt-0.5 text-indigo-500 shrink-0" />
-                        <span>Enter the generated App Password without spaces.</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
 
                 <div className="flex gap-3 pt-2">
                   <motion.button whileTap={{ scale: 0.98 }} type="submit" disabled={loading}
