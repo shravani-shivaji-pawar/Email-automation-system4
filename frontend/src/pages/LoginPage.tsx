@@ -96,7 +96,7 @@ const LoginPage: React.FC = () => {
             <Sparkles className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 dark:from-indigo-400 dark:via-purple-400 dark:to-pink-400 bg-clip-text text-transparent">
-            AI Email Pro
+            Mail X
           </h1>
           <p className="text-slate-500 dark:text-slate-400 mt-2">Sign in to your account</p>
         </motion.div>

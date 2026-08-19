@@ -357,6 +357,7 @@ def _fetch_inbox_snippets_gmail(
     Fetch inbox emails using Gmail API for connected Google Accounts.
     """
     import base64
+    import time
     from datetime import datetime, timezone
     from googleapiclient.discovery import build
     from app.gmail_service import _build_credentials
@@ -371,8 +372,14 @@ def _fetch_inbox_snippets_gmail(
             q += " label:UNREAD"
 
         limit = max_emails if max_emails > 0 else 50
+        t_list_0 = time.perf_counter()
         results = service.users().messages().list(userId="me", q=q, maxResults=limit).execute()
         messages = results.get("messages", [])
+        t_list_1 = time.perf_counter()
+        print(f"[PERF] gmail_list: {t_list_1 - t_list_0:.2f}s")
+
+        t_get_0 = time.perf_counter()
+        parsing_time = 0.0
 
         for m in messages:
             try:
@@ -387,6 +394,7 @@ def _fetch_inbox_snippets_gmail(
                 from_header = next((h["value"] for h in headers if h["name"].lower() == "from"), "")
                 seen = "UNREAD" not in msg.get("labelIds", [])
 
+                t_parse_0 = time.perf_counter()
                 body = ""
                 if include_body:
                     def get_text_recursive(part) -> str:
@@ -406,6 +414,8 @@ def _fetch_inbox_snippets_gmail(
                     body = get_text_recursive(payload)
                     if len(body) > FAST_BODY_CHAR_LIMIT:
                         body = body[:FAST_BODY_CHAR_LIMIT] + "...(truncated)"
+                t_parse_1 = time.perf_counter()
+                parsing_time += (t_parse_1 - t_parse_0)
 
                 snippets.append({
                     "uid": m["id"],
@@ -420,6 +430,10 @@ def _fetch_inbox_snippets_gmail(
             except Exception as e:
                 print(f"Error fetching Gmail message {m.get('id')}: {e}")
                 continue
+
+        t_get_1 = time.perf_counter()
+        print(f"[PERF] gmail_messages_get: {t_get_1 - t_get_0:.2f}s")
+        print(f"[PERF] email_parsing: {parsing_time:.2f}s")
 
     except Exception as e:
         print(f"Gmail API fetch error: {e}")
@@ -1874,8 +1888,8 @@ def send_single_email_worker(
             "email": row.get("email", ""),
             "error": str(e),
         }
-@app.post("/api/email-insights/query")
-def email_insights_query(payload: PromptQueryRequest):
+def _email_insights_query_impl(payload: PromptQueryRequest):
+    import time
     # Get max_emails from frontend (default 10, 0 means unlimited)
     max_emails = int(payload.max_emails) if payload.max_emails else 10
     command_response = _handle_prompt_command(payload.question, max_emails)
@@ -2018,7 +2032,10 @@ def email_insights_query(payload: PromptQueryRequest):
     rule_answer = _rule_intent_answer(intent, snippets)
     grounded_note = _build_grounded_note(snippets)
     history = payload.history if payload.use_memory else []
+    t_llm_0 = time.perf_counter()
     answer = rule_answer or answer_email_question(payload.question, context, grounded_note, history)
+    t_llm_1 = time.perf_counter()
+    print(f"[PERF] llm: {t_llm_1 - t_llm_0:.2f}s")
     senders_used = len({s.get("sender_email", "") for s in snippets if s.get("sender_email")})
     response = {
         "success": True,
@@ -2033,6 +2050,17 @@ def email_insights_query(payload: PromptQueryRequest):
     if isinstance(cache, dict):
         cache[cache_key] = {"at": now, "response": response}
     return response
+
+
+@app.post("/api/email-insights/query")
+def email_insights_query(payload: PromptQueryRequest):
+    import time
+    t0 = time.perf_counter()
+    try:
+        return _email_insights_query_impl(payload)
+    finally:
+        t1 = time.perf_counter()
+        print(f"[PERF] TOTAL /api/email-insights/query: {t1 - t0:.2f}s")
 
 
 @app.post("/api/email-insights/index")
@@ -2103,20 +2131,26 @@ def chat_history(user_id: int, limit: int = 40):
 
 @app.post("/api/chat/turn")
 def chat_add_turn(payload: ChatTurnRequest):
-    sender_email = _get_current_session_sender_email()
-    role = (payload.role or "").strip().lower()
-    if role not in {"user", "assistant"}:
-        raise HTTPException(status_code=400, detail="role must be user or assistant")
-    from app.vector_search import add_chat_turn
+    import time
+    t0 = time.perf_counter()
+    try:
+        sender_email = _get_current_session_sender_email()
+        role = (payload.role or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            raise HTTPException(status_code=400, detail="role must be user or assistant")
+        from app.vector_search import add_chat_turn
 
-    add_chat_turn(
-        _db(),
-        user_id=int(payload.user_id),
-        sender_email=sender_email,
-        role=role,
-        content=(payload.content or "").strip(),
-    )
-    return {"success": True}
+        add_chat_turn(
+            _db(),
+            user_id=int(payload.user_id),
+            sender_email=sender_email,
+            role=role,
+            content=(payload.content or "").strip(),
+        )
+        return {"success": True}
+    finally:
+        t1 = time.perf_counter()
+        print(f"[PERF] TOTAL /api/chat/turn: {t1 - t0:.2f}s")
 
 
 @app.get("/api/email-insights/recent")

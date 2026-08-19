@@ -18,9 +18,23 @@ from app.database import get_gmail_token, update_gmail_access_token
 
 
 def _build_credentials(user_email: str) -> Credentials:
+    import time
+    t0 = time.perf_counter()
+    from datetime import datetime
+
     token_row = get_gmail_token(user_email)
     if not token_row:
         raise ValueError(f"No Gmail account connected for {user_email}")
+
+    expiry_str = token_row.get("token_expiry")
+    expiry_dt = None
+    if expiry_str:
+        try:
+            # Replace 'Z' with '+00:00' for Python < 3.11 ISO parsing compatibility
+            cleaned = expiry_str.replace("Z", "+00:00")
+            expiry_dt = datetime.fromisoformat(cleaned)
+        except Exception as e:
+            print(f"Error parsing token_expiry: {e}")
 
     creds = Credentials(
         token=token_row.get("access_token"),
@@ -29,6 +43,7 @@ def _build_credentials(user_email: str) -> Credentials:
         client_id=GOOGLE_CLIENT_ID,
         client_secret=GOOGLE_CLIENT_SECRET,
         scopes=SCOPES,
+        expiry=expiry_dt,
     )
 
     # Refresh if expired / no access token cached
@@ -36,6 +51,8 @@ def _build_credentials(user_email: str) -> Credentials:
         creds.refresh(Request())
         update_gmail_access_token(user_email, creds.token, creds.expiry)
 
+    t1 = time.perf_counter()
+    print(f"[PERF] credentials: {t1 - t0:.2f}s")
     return creds
 
 
