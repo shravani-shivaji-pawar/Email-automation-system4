@@ -10,7 +10,7 @@ const getApiBase = () => {
       return 'http://localhost:8000/api';
     }
   }
-  return "https://email-automation-system2.onrender.com/api";
+  return "https://email-automation-system3-production.up.railway.app/api";
 };
 const API_BASE = getApiBase();
 const api = axios.create({

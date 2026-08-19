@@ -150,7 +150,7 @@ if "insights_selected_uid" not in st.session_state:
 # API HELPERS
 # ════════════════════════════════════════════
 def api_base_url() -> str:
-    return st.session_state.get("api_base_url", "https://email-automation-system2.onrender.com")
+    return st.session_state.get("api_base_url", "https://email-automation-system3-production.up.railway.app")
 
 
 def get_json(endpoint: str) -> dict[str, Any] | None:

@@ -12,7 +12,10 @@ from google_auth_oauthlib.flow import Flow
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "https://email-automation-system2.onrender.com")
+GOOGLE_REDIRECT_URI = os.getenv(
+    "GOOGLE_REDIRECT_URI",
+    "https://email-automation-system3-production.up.railway.app/google/callback"
+)
 
 # Secret used to sign the OAuth `state` param (set a strong random value in prod)
 STATE_SECRET = os.getenv("OAUTH_STATE_SECRET", "dev-insecure-change-me")
