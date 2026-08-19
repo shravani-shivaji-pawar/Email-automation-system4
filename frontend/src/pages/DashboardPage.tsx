@@ -8,16 +8,6 @@ import ConnectGoogleButton from '../components/ConnectGoogleButton';
 import type { SendStatusResponse } from '../types';
 import { motion } from 'framer-motion';
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { staggerChildren: 0.08 } },
-};
-
-const itemVariants = {
-  hidden: { opacity: 0, y: 20 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.4 } },
-};
-
 const statVariants = {
   hidden: { opacity: 0, scale: 0.95 },
   visible: (i: number) => ({

@@ -41,7 +41,7 @@ export interface SendProgress {
   failed: number;
   skipped: number;
   bounced: number;
-  current_email: string | null;
+  current_email?: string | null;
   current_emails_summary: string;
   active_job_count: number;
 }
@@ -70,11 +70,13 @@ export interface SendStatusResponse {
   jobs: SendJob[];
   active_job_count: number;
   last_batch: {
+    job_id: string;
     at: string;
     from_email: string;
     subject: string;
     mode: string;
     total: number;
+    processed: number;
     delivered: number;
     failed: number;
     skipped: number;

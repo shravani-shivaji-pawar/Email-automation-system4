@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Users, Mail, Building, X, CheckCircle, Eye, EyeOff, ExternalLink, Info } from 'lucide-react';
+import { Plus, Users, Mail, Building, X, CheckCircle } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { getSenders, addSender, selectSender } from '../api';
 import type { Sender } from '../types';
@@ -11,7 +11,6 @@ const SendersPage: React.FC = () => {
   const [senders, setSenders] = useState<Sender[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: '', organization_name: '', email: '', password: '' });
-  const [showAppPassword, setShowAppPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [activeSender, setActiveSender] = useState<number | null>(null);
@@ -41,7 +40,6 @@ const SendersPage: React.FC = () => {
       await loadSenders();
       setShowAdd(false);
       setForm({ name: '', organization_name: '', email: '', password: '' });
-      setShowAppPassword(false);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to add sender');
     } finally { setLoading(false); }
