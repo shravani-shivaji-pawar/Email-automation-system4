@@ -414,12 +414,97 @@ def is_gmail_connected(user_email: str) -> bool:
 
 
 # =========================
+# CREATE BATCHES TABLE
+# =========================
+def create_batches_table():
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS batches (
+                id TEXT PRIMARY KEY,
+                owner_user_id INTEGER,
+                sender_email TEXT,
+                subject TEXT,
+                total INTEGER,
+                processed INTEGER,
+                delivered INTEGER,
+                failed INTEGER,
+                skipped INTEGER,
+                bounced INTEGER,
+                status TEXT,
+                created_at TEXT,
+                results TEXT,
+                bounced_emails TEXT
+            )
+        """)
+
+def save_batch(batch_id, owner_user_id, sender_email, subject, total, processed, delivered, failed, skipped, bounced, status, created_at, results=None, bounced_emails=None):
+    import json
+    results_str = json.dumps(results) if results is not None else "[]"
+    bounced_emails_str = json.dumps(bounced_emails) if bounced_emails is not None else "[]"
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO batches (id, owner_user_id, sender_email, subject, total, processed, delivered, failed, skipped, bounced, status, created_at, results, bounced_emails)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                processed=excluded.processed,
+                delivered=excluded.delivered,
+                failed=excluded.failed,
+                skipped=excluded.skipped,
+                bounced=excluded.bounced,
+                status=excluded.status,
+                results=excluded.results,
+                bounced_emails=excluded.bounced_emails
+        """, (batch_id, owner_user_id, sender_email, subject, total, processed, delivered, failed, skipped, bounced, status, created_at, results_str, bounced_emails_str))
+
+def get_batches_by_user(owner_user_id):
+    import json
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, owner_user_id, sender_email, subject, total, processed, delivered, failed, skipped, bounced, status, created_at, results, bounced_emails
+            FROM batches WHERE owner_user_id = ? ORDER BY created_at DESC
+        """, (owner_user_id,))
+        rows = cursor.fetchall()
+    
+    batches = []
+    for r in rows:
+        try:
+            results = json.loads(r[12])
+        except Exception:
+            results = []
+        try:
+            bounced_emails = json.loads(r[13])
+        except Exception:
+            bounced_emails = []
+        batches.append({
+            "job_id": r[0],
+            "owner_user_id": r[1],
+            "from_email": r[2],
+            "subject": r[3],
+            "total": r[4],
+            "processed": r[5],
+            "delivered": r[6],
+            "failed": r[7],
+            "skipped": r[8],
+            "bounced": r[9],
+            "status": r[10],
+            "started_at": r[11],
+            "completed_at": r[11] if r[10] != "in_progress" else None,
+            "results": results,
+            "bounced_emails": bounced_emails
+        })
+    return batches
+
+# =========================
 # INIT ALL TABLES
 # =========================
 def setup_database():
     init_db()
     create_senders_table()
     create_gmail_tokens_table()
+    create_batches_table()
 
 
 # =========================

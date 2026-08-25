@@ -129,6 +129,8 @@ from app.database import (
     get_gmail_token,
     delete_gmail_token,
     is_gmail_connected,
+    save_batch,
+    get_batches_by_user,
 )
 from app.auth_google import get_auth_url, get_flow, fetch_tokens, get_user_info, verify_state
 from app.gmail_service import send_email_gmail
@@ -2865,12 +2867,15 @@ _send_jobs_lock = threading.Lock()
 
 def _snapshot_send_context() -> dict[str, Any]:
     """Capture current upload + active sender so background jobs stay independent."""
+    current_user = state.get("current_user")
+    owner_user_id = current_user["id"] if (isinstance(current_user, dict) and "id" in current_user) else None
     return {
         "rows": copy.deepcopy(state.get("rows") or []),
         "first_name_column": state.get("first_name_column"),
         "email_column": state.get("email_column"),
         "attachments": copy.deepcopy(list(state.get("attachments") or [])),
         "sender_snapshot": copy.deepcopy(state.get("active_sender")),
+        "owner_user_id": owner_user_id,
     }
 
 
@@ -3379,6 +3384,8 @@ def _send_worker_job(job_id: str, subject: str, message_template: str, snapshot:
         "results": final_rows,
     }
 
+    owner_user_id = snapshot.get("owner_user_id")
+
     with _send_jobs_lock:
         j = state["send_jobs"][job_id]
         j["in_progress"] = False
@@ -3389,6 +3396,24 @@ def _send_worker_job(job_id: str, subject: str, message_template: str, snapshot:
         # reset global flag if no other jobs are running
         if not any(v.get("in_progress") for v in state["send_jobs"].values()):
             state["stop_requested"] = False
+
+    # Persist the final status to DB
+    save_batch(
+        batch_id=job_id,
+        owner_user_id=owner_user_id,
+        sender_email=from_addr,
+        subject=subject,
+        total=len(final_rows),
+        processed=int(pj.get("processed", 0)),
+        delivered=delivered_count,
+        failed=failed_count,
+        skipped=skipped_count,
+        bounced=bounce_count,
+        status="completed" if skipped_count == 0 and failed_count == 0 else "completed_with_errors",
+        created_at=last_batch["at"],
+        results=final_rows,
+        bounced_emails=bounced_list
+    )
 
     _refresh_legacy_send_aggregate()
     print(f"✅ Send worker finished ({job_id}).")
@@ -3407,6 +3432,7 @@ async def send_messages(payload: SendRequest) -> dict[str, object]:
     job_id = uuid.uuid4().hex[:12]
     sender_snap = snapshot.get("sender_snapshot")
     from_email = (sender_snap or {}).get("email") or ""
+    owner_user_id = snapshot.get("owner_user_id")
 
     with _send_jobs_lock:
         state["stop_requested"] = False
@@ -3421,7 +3447,24 @@ async def send_messages(payload: SendRequest) -> dict[str, object]:
             "stop_requested": False,
             "progress": {},
             "snapshot_meta": {"row_count": len(rows)},
+            "owner_user_id": owner_user_id,
         }
+
+    # Save to SQLite batches database
+    save_batch(
+        batch_id=job_id,
+        owner_user_id=owner_user_id,
+        sender_email=from_email,
+        subject=payload.subject,
+        total=len(rows),
+        processed=0,
+        delivered=0,
+        failed=0,
+        skipped=0,
+        bounced=0,
+        status="in_progress",
+        created_at=state["send_jobs"][job_id]["started_at"]
+    )
 
     threading.Thread(
         target=_send_worker_job,
@@ -3499,7 +3542,7 @@ async def ai_agent_status() -> dict[str, object]:
 
 _last_bounce_sync_time = 0.0
 
-def _sync_recent_bounces():
+def _sync_recent_bounces(current_user_id: int):
     global _last_bounce_sync_time
     import time
     from datetime import datetime, timezone
@@ -3514,19 +3557,26 @@ def _sync_recent_bounces():
     senders_to_check = set()
     now_dt = datetime.now(timezone.utc)
     
-    last_batch = state.get("last_batch")
+    db_batches = get_batches_by_user(current_user_id)
+    last_batch = db_batches[0] if db_batches else None
     if last_batch:
         try:
-            at_dt = datetime.fromisoformat(last_batch.get("at"))
+            at_dt = datetime.fromisoformat(last_batch.get("started_at"))
             if (now_dt - at_dt).total_seconds() < 1800:
                 senders_to_check.add(last_batch.get("from_email"))
         except Exception:
             pass
             
     for jid, job in state.get("send_jobs", {}).items():
-        started = job.get("started_at")
-        if started and (time.time() - started) < 1800:
-            senders_to_check.add(job.get("from_email"))
+        if job.get("owner_user_id") == current_user_id:
+            started = job.get("started_at")
+            if started:
+                try:
+                    st_dt = datetime.fromisoformat(started)
+                    if (now_dt - st_dt).total_seconds() < 1800:
+                        senders_to_check.add(job.get("from_email"))
+                except Exception:
+                    senders_to_check.add(job.get("from_email"))
             
     if not senders_to_check:
         return
@@ -3578,12 +3628,28 @@ def _sync_recent_bounces():
                     last_batch["failed"] = sum(1 for r in last_batch["results"] if r.get("status") == "failed")
                     last_batch["bounced"] = sum(1 for r in last_batch["results"] if r.get("status") == "bounced")
                     last_batch["bounced_emails"] = sorted(list(set(last_batch.get("bounced_emails", []) + list(bounced_emails))))
-                    state["last_batch"] = last_batch
+                    # Save back to database
+                    save_batch(
+                        batch_id=last_batch["job_id"],
+                        owner_user_id=current_user_id,
+                        sender_email=last_batch["from_email"],
+                        subject=last_batch["subject"],
+                        total=last_batch["total"],
+                        processed=last_batch["processed"],
+                        delivered=last_batch["delivered"],
+                        failed=last_batch["failed"],
+                        skipped=last_batch["skipped"],
+                        bounced=last_batch["bounced"],
+                        status=last_batch.get("status", "completed"),
+                        created_at=last_batch["started_at"],
+                        results=last_batch["results"],
+                        bounced_emails=last_batch["bounced_emails"]
+                    )
 
             # Update send_jobs
             with _send_jobs_lock:
                 for jid, job in state.get("send_jobs", {}).items():
-                    if job.get("from_email") == from_email:
+                    if job.get("owner_user_id") == current_user_id and job.get("from_email") == from_email:
                         p = job.get("progress") or {}
                         updated = False
                         for r in p.get("results", []):
@@ -3606,67 +3672,119 @@ def _sync_recent_bounces():
 
 @app.get("/api/send-status")
 async def send_status() -> dict[str, object]:
-    _sync_recent_bounces()
-    bundle = _refresh_legacy_send_aggregate()
+    current_user = state.get("current_user")
+    if not current_user:
+        smtp = load_smtp_settings()
+        active = state.get("active_sender")
+        smtp_ready = smtp is not None or (isinstance(active, dict) and bool(active.get("email")) and bool(active.get("password")))
+        return {
+            "success": True,
+            "send_in_progress": False,
+            "stop_requested": False,
+            "progress": {
+                "total": 0,
+                "processed": 0,
+                "delivered": 0,
+                "failed": 0,
+                "skipped": 0,
+                "bounced": 0,
+                "current_emails_summary": "",
+                "active_job_count": 0,
+            },
+            "jobs": [],
+            "active_job_count": 0,
+            "last_batch": None,
+            "smtp_configured": bool(smtp_ready),
+            "delivery_note": "No logged in user"
+        }
 
+    current_user_id = current_user["id"]
+    _sync_recent_bounces(current_user_id)
+
+    # 1. Fetch persistent DB batches for the user
+    db_batches = get_batches_by_user(current_user_id)
+
+    # 2. Get active jobs in memory for the user
+    active_jobs = []
+    with _send_jobs_lock:
+        jobs_map = dict(state.get("send_jobs") or {})
+        for jid, job in jobs_map.items():
+            if job.get("owner_user_id") == current_user_id and job.get("in_progress"):
+                prog = job.get("progress") or {}
+                active_jobs.append({
+                    "job_id": jid,
+                    "owner_user_id": current_user_id,
+                    "from_email": job.get("from_email"),
+                    "subject": job.get("subject"),
+                    "in_progress": True,
+                    "started_at": job.get("started_at"),
+                    "completed_at": None,
+                    "total": prog.get("total", 0),
+                    "processed": prog.get("processed", 0),
+                    "delivered": prog.get("delivered", 0),
+                    "failed": prog.get("failed", 0),
+                    "skipped": prog.get("skipped", 0),
+                    "bounced": prog.get("bounced", 0),
+                    "current_email": prog.get("current_email"),
+                    "results": prog.get("results", []),
+                    "bounced_emails": job.get("last_batch", {}).get("bounced_emails", []) if job.get("last_batch") else []
+                })
+
+    # 3. Merge: Active memory jobs replace historical database records during in-progress runs
+    merged_jobs = []
+    active_jids = {j["job_id"] for j in active_jobs}
+    merged_jobs.extend(active_jobs)
+    for b in db_batches:
+        if b["job_id"] not in active_jids:
+            merged_jobs.append(b)
+
+    merged_jobs.sort(key=lambda x: x.get("started_at") or "", reverse=True)
+
+    # Determine user-specific last batch (first completed batch)
+    user_last_batch = None
+    for j in merged_jobs:
+        if not j.get("in_progress"):
+            user_last_batch = {
+                "job_id": j["job_id"],
+                "at": j["started_at"],
+                "from_email": j["from_email"],
+                "subject": j["subject"],
+                "mode": j.get("mode", "smtp"),
+                "total": j["total"],
+                "processed": j["processed"],
+                "delivered": j["delivered"],
+                "failed": j["failed"],
+                "skipped": j["skipped"],
+                "bounced": j["bounced"],
+                "bounced_emails": j.get("bounced_emails", []),
+                "results": j.get("results", []),
+            }
+            break
+
+    # Aggregate counts for the user's jobs only
     smtp = load_smtp_settings()
     active = state.get("active_sender")
-
-    smtp_ready = (
-        smtp is not None
-        or (
-            isinstance(active, dict)
-            and bool(active.get("email"))
-            and bool(active.get("password"))
-        )
-    )
-
-    jobs = bundle.get("jobs") or []
+    smtp_ready = smtp is not None or (isinstance(active, dict) and bool(active.get("email")) and bool(active.get("password")))
 
     return {
         "success": True,
-
-        "send_in_progress": bundle.get("active_job_count", 0) > 0,
-
+        "send_in_progress": len(active_jobs) > 0,
         "stop_requested": state.get("stop_requested", False),
-
         "progress": {
-            "total": sum(j.get("total", 0) or 0 for j in jobs),
-
-            "processed": sum(j.get("processed", 0) or 0 for j in jobs),
-
-            "delivered": sum(j.get("delivered", 0) or 0 for j in jobs),
-
-            "failed": sum(j.get("failed", 0) or 0 for j in jobs),
-
-            "skipped": sum(j.get("skipped", 0) or 0 for j in jobs),
-
-            "bounced": sum(j.get("bounced", 0) or 0 for j in jobs),
-
-            "current_emails_summary": ", ".join(
-                [
-                    f"{j.get('from_email')} → {j.get('current_email')}"
-                    for j in jobs
-                    if j.get("current_email")
-                ]
-            ),
-
-            "active_job_count": bundle.get("active_job_count", 0),
+            "total": sum(j.get("total", 0) for j in merged_jobs),
+            "processed": sum(j.get("processed", 0) for j in merged_jobs),
+            "delivered": sum(j.get("delivered", 0) for j in merged_jobs),
+            "failed": sum(j.get("failed", 0) for j in merged_jobs),
+            "skipped": sum(j.get("skipped", 0) for j in merged_jobs),
+            "bounced": sum(j.get("bounced", 0) for j in merged_jobs),
+            "current_emails_summary": ", ".join([f"{j.get('from_email')} → {j.get('current_email')}" for j in active_jobs if j.get("current_email")]),
+            "active_job_count": len(active_jobs),
         },
-
-        "jobs": jobs,
-
-        "active_job_count": bundle.get("active_job_count", 0),
-
-        "last_batch": state.get("last_batch"),
-
+        "jobs": merged_jobs,
+        "active_job_count": len(active_jobs),
+        "last_batch": user_last_batch,
         "smtp_configured": bool(smtp_ready),
-
-        "delivery_note": (
-            "SMTP via active sender credentials or SMTP_* env. Multiple concurrent sends are supported."
-            if smtp_ready
-            else "Demo mode: configure sender app password / SMTP_* for real sending."
-        ),
+        "delivery_note": "SMTP via active sender credentials or SMTP_* env. Multiple concurrent sends are supported." if smtp_ready else "Demo mode: configure sender app password / SMTP_* for real sending."
     }
 
 # ════════════════════════════════════════════
@@ -4065,11 +4183,21 @@ def gmail_send_bulk(payload: dict = Body(...)):
             results.append({"email": to_addr, "status": "failed", "detail": str(e)})
             failed += 1
 
-    state["last_batch"] = {
+    current_user = state.get("current_user")
+    owner_user_id = current_user["id"] if (isinstance(current_user, dict) and "id" in current_user) else None
+    if not owner_user_id:
+        user_record = get_user_by_email(user_email)
+        owner_user_id = user_record["id"] if user_record else None
+
+    job_id = uuid.uuid4().hex[:12]
+    last_batch = {
+        "job_id": job_id,
         "at": datetime.now(timezone.utc).isoformat(),
+        "from_email": user_email,
         "subject": subject,
         "mode": "gmail_api",
         "total": len(results),
+        "processed": len(results),
         "delivered": delivered,
         "failed": failed,
         "skipped": 0,
@@ -4077,5 +4205,23 @@ def gmail_send_bulk(payload: dict = Body(...)):
         "bounced_emails": [],
         "results": results,
     }
+    state["last_batch"] = last_batch
+
+    save_batch(
+        batch_id=job_id,
+        owner_user_id=owner_user_id,
+        sender_email=user_email,
+        subject=subject,
+        total=len(results),
+        processed=len(results),
+        delivered=delivered,
+        failed=failed,
+        skipped=0,
+        bounced=0,
+        status="completed" if failed == 0 else "completed_with_errors",
+        created_at=last_batch["at"],
+        results=results,
+        bounced_emails=[]
+    )
 
     return {"success": True, "total": len(results), "delivered": delivered, "failed": failed, "results": results}
