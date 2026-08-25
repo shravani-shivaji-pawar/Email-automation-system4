@@ -104,6 +104,11 @@ def init_db():
         # column is simply added with no data loss.
         if "domain" not in cols:
             cursor.execute("ALTER TABLE users ADD COLUMN domain TEXT")
+        if "reset_token" not in cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN reset_token TEXT")
+        if "reset_token_expires" not in cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN reset_token_expires TEXT")
+
 
 
 # =========================
@@ -152,17 +157,70 @@ def get_user_by_email(email):
         row = cursor.fetchone()
 
     if row:
+        row_keys = row.keys()
         return {
-            "id": row[0],
-            "name": row[1],
-            "email": row[2],
-            "phone": row[3],
-            "password": row[4],
-            "role": row[5],
-            "app_password": row[6] if len(row) > 6 else None,
-            "domain": row[7] if len(row) > 7 else None,
+            "id": row["id"],
+            "name": row["name"],
+            "email": row["email"],
+            "phone": row["phone"],
+            "password": row["password"],
+            "role": row["role"],
+            "app_password": row["app_password"] if "app_password" in row_keys else None,
+            "domain": row["domain"] if "domain" in row_keys else None,
+            "reset_token": row["reset_token"] if "reset_token" in row_keys else None,
+            "reset_token_expires": row["reset_token_expires"] if "reset_token_expires" in row_keys else None,
         }
     return None
+
+
+# =========================
+# GET USER BY RESET TOKEN
+# =========================
+def get_user_by_reset_token(token: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE reset_token = ?", (token,))
+        row = cursor.fetchone()
+
+    if row:
+        row_keys = row.keys()
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "email": row["email"],
+            "phone": row["phone"],
+            "password": row["password"],
+            "role": row["role"],
+            "app_password": row["app_password"] if "app_password" in row_keys else None,
+            "domain": row["domain"] if "domain" in row_keys else None,
+            "reset_token": row["reset_token"] if "reset_token" in row_keys else None,
+            "reset_token_expires": row["reset_token_expires"] if "reset_token_expires" in row_keys else None,
+        }
+    return None
+
+
+# =========================
+# UPDATE USER RESET TOKEN
+# =========================
+def update_user_reset_token(email: str, token: str | None, expires: str | None):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE email = ?",
+            (token, expires, email),
+        )
+
+
+# =========================
+# UPDATE USER PASSWORD
+# =========================
+def update_user_password(email: str, hashed_password: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET password = ? WHERE email = ?",
+            (hashed_password, email),
+        )
 
 
 # =========================
@@ -183,6 +241,7 @@ def update_user_domain(email, domain):
             "UPDATE users SET domain = ? WHERE email = ?",
             (domain, email),
         )
+
 
 
 # =========================
@@ -498,6 +557,56 @@ def get_batches_by_user(owner_user_id):
     return batches
 
 # =========================
+# CREATE USER CONSENT TABLE
+# =========================
+def create_user_consent_table():
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_consent (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
+                has_accepted INTEGER NOT NULL DEFAULT 0,
+                accepted_version TEXT NOT NULL DEFAULT 'v1.0',
+                accepted_at TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_consent_user_id ON user_consent(user_id)")
+
+
+def get_user_consent(user_id: int):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT has_accepted, accepted_version, accepted_at FROM user_consent WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+    if row:
+        return {
+            "has_accepted": bool(row[0]),
+            "accepted_version": row[1],
+            "accepted_at": row[2]
+        }
+    return {
+        "has_accepted": False,
+        "accepted_version": "v1.0",
+        "accepted_at": None
+    }
+
+
+def save_user_consent(user_id: int, has_accepted: bool, accepted_version: str, accepted_at_iso: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO user_consent (user_id, has_accepted, accepted_version, accepted_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                has_accepted=excluded.has_accepted,
+                accepted_version=excluded.accepted_version,
+                accepted_at=excluded.accepted_at
+        """, (user_id, 1 if has_accepted else 0, accepted_version, accepted_at_iso))
+
+
+# =========================
 # INIT ALL TABLES
 # =========================
 def setup_database():
@@ -505,6 +614,8 @@ def setup_database():
     create_senders_table()
     create_gmail_tokens_table()
     create_batches_table()
+    create_user_consent_table()
+
 
 
 # =========================

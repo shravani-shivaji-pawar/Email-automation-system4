@@ -3,6 +3,7 @@ export interface User {
   name: string;
   email: string;
   role: 'individual' | 'organization';
+  has_accepted_terms?: boolean;
 }
 
 export interface Sender {

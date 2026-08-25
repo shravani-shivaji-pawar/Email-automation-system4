@@ -38,6 +38,18 @@ export const register = async (data: {
 export const login = async (data: { email: string; password: string }) =>
   api.post('/login', data);
 
+export const forgotPassword = async (email: string) =>
+  api.post('/forgot-password', { email });
+
+export const resetPassword = async (token: string, newPassword: string) =>
+  api.post('/reset-password', { token, new_password: newPassword });
+
+export const getConsentStatus = async () =>
+  api.get('/consent/status');
+
+export const acceptConsent = async () =>
+  api.post('/consent/accept');
+
 // Senders
 export const addSender = async (data: {
   user_id: number;

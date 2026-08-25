@@ -171,6 +171,14 @@ const LoginPage: React.FC = () => {
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
+              <div className="flex justify-end mt-2">
+                <Link
+                  to="/forgot-password"
+                  className="text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors"
+                >
+                  Forgot Password?
+                </Link>
+              </div>
             </div>
 
             <motion.button

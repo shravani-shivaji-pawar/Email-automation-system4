@@ -7,6 +7,9 @@ import DashboardPage from './pages/DashboardPage';
 import SendEmailsPage from './pages/SendEmailsPage';
 import AiAgentPage from './pages/AiAgentPage';
 import SendersPage from './pages/SendersPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import TermsAndPoliciesModal from './components/TermsAndPoliciesModal';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
@@ -20,10 +23,13 @@ const AppRoutes: React.FC = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50 dark:from-slate-950 dark:via-slate-900 dark:to-indigo-950 transition-colors duration-300">
       {user && <Navigation />}
+      <TermsAndPoliciesModal />
       <main className={user ? 'pt-4' : ''}>
         <Routes>
           <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
           <Route path="/register" element={user ? <Navigate to="/dashboard" replace /> : <RegisterPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/send-emails" element={<ProtectedRoute><SendEmailsPage /></ProtectedRoute>} />
           <Route path="/ai-agent" element={<ProtectedRoute><AiAgentPage /></ProtectedRoute>} />

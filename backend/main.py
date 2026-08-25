@@ -131,6 +131,11 @@ from app.database import (
     is_gmail_connected,
     save_batch,
     get_batches_by_user,
+    get_user_by_reset_token,
+    update_user_reset_token,
+    update_user_password,
+    get_user_consent,
+    save_user_consent,
 )
 from app.auth_google import get_auth_url, get_flow, fetch_tokens, get_user_info, verify_state
 from app.gmail_service import send_email_gmail
@@ -2635,9 +2640,133 @@ def extract_email_domain(email: str) -> str | None:
         return None
 
 
+from pydantic import BaseModel
+import secrets
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+@app.post("/api/forgot-password")
+def forgot_password(payload: ForgotPasswordRequest):
+    email = payload.email.strip().lower()
+    user = get_user_by_email(email)
+    
+    success_response = {
+        "message": "If an account exists for this email, a password reset link has been sent."
+    }
+    
+    if not user:
+        return success_response
+        
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    expires_at_iso = expires_at.isoformat()
+    
+    update_user_reset_token(email, token, expires_at_iso)
+    
+    reset_link = f"http://localhost:5173/reset-password?token={token}"
+    
+    smtp_settings = load_smtp_settings()
+    if smtp_settings:
+        try:
+            send_email_smtp(
+                to_addr=email,
+                subject="Reset Your Password - Mail X",
+                body=(
+                    f"Hello,\n\n"
+                    f"You requested to reset your password for your Mail X account.\n"
+                    f"Please click the link below to set a new password:\n\n"
+                    f"{reset_link}\n\n"
+                    f"This link is valid for 15 minutes. If you did not make this request, you can safely ignore this email.\n\n"
+                    f"Best regards,\n"
+                    f"Mail X Team"
+                ),
+                settings=smtp_settings
+            )
+        except Exception as e:
+            print(f"[ERROR] Failed to send password reset email: {e}")
+            print(f"[DEVELOPMENT ONLY] Reset Link: {reset_link}")
+    else:
+        print("[WARNING] SMTP not configured. Printing reset link to terminal for development:")
+        print(f"[DEVELOPMENT ONLY] Reset Link: {reset_link}")
+        
+    return success_response
+
+
+@app.post("/api/reset-password")
+def reset_password(payload: ResetPasswordRequest):
+    token = payload.token.strip()
+    new_password = payload.new_password
+    
+    user = get_user_by_reset_token(token)
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+        
+    expires_str = user.get("reset_token_expires")
+    if not expires_str:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+        
+    try:
+        expires_at = datetime.fromisoformat(expires_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+        
+    if datetime.now(timezone.utc) > expires_at:
+        update_user_reset_token(user["email"], None, None)
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token.")
+        
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+        
+    hashed = hash_password(new_password)
+    update_user_password(user["email"], hashed)
+    update_user_reset_token(user["email"], None, None)
+    
+    return {"success": True, "message": "Password reset successfully."}
+
+
+@app.get("/api/consent/status")
+def get_consent_status():
+    current_user = state.get("current_user")
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    consent = get_user_consent(current_user["id"])
+    return consent
+
+
+@app.post("/api/consent/accept")
+def accept_consent():
+    current_user = state.get("current_user")
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    accepted_at_iso = datetime.now(timezone.utc).isoformat()
+    save_user_consent(
+        user_id=current_user["id"],
+        has_accepted=True,
+        accepted_version="v1.0",
+        accepted_at_iso=accepted_at_iso
+    )
+    
+    current_user["has_accepted_terms"] = True
+    state["current_user"] = current_user
+    
+    return {
+        "has_accepted": True,
+        "accepted_version": "v1.0",
+        "accepted_at": accepted_at_iso
+    }
+
+
 # ════════════════════════════════════════════
 # AUTH ENDPOINTS (from AI_Email-shravani)
 # ════════════════════════════════════════════
+
 @app.post("/api/register")
 def register(data: dict):
     name = data.get("name", "").strip()
