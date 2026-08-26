@@ -2672,7 +2672,7 @@ def forgot_password(payload: ForgotPasswordRequest):
     
     update_user_reset_token(email, token, expires_at_iso)
     
-    reset_link = f"http://localhost:5173/reset-password?token={token}"
+    reset_link = f"{FRONTEND_URL}/reset-password?token={token}"
     
     smtp_settings = load_smtp_settings()
     if smtp_settings:
@@ -2864,7 +2864,7 @@ def api_request_credential_change(payload: RequestCredentialChangeRequest):
     
     # Send confirmation email to original/current address
     smtp_settings = load_smtp_settings()
-    confirm_link = f"http://localhost:5173/confirm-credential-change?token={token}"
+    confirm_link = f"{FRONTEND_URL}/confirm-credential-change?token={token}"
     email_body = (
         f"Hello {current_user['name']},\n\n"
         f"You requested to change your {change_type} for your Mail X account.\n"
