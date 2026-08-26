@@ -4,6 +4,7 @@ export interface User {
   email: string;
   role: 'individual' | 'organization';
   has_accepted_terms?: boolean;
+  phone?: string;
 }
 
 export interface Sender {

@@ -50,6 +50,15 @@ export const getConsentStatus = async () =>
 export const acceptConsent = async () =>
   api.post('/consent/accept');
 
+export const updateUserProfile = async (name: string, phone: string) =>
+  api.put('/user/update-profile', { name, phone });
+
+export const requestCredentialChange = async (type: 'email' | 'password', value: string) =>
+  api.post('/user/request-credential-change', { type, value });
+
+export const confirmCredentialChange = async (token: string) =>
+  api.post('/user/confirm-credential-change', { token });
+
 // Senders
 export const addSender = async (data: {
   user_id: number;

@@ -1,9 +1,9 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Mail, Send, Bot, LogOut, Users, Moon, Sun, Menu, X, Sparkles, CheckCircle } from 'lucide-react';
+import { Mail, Send, Bot, LogOut, Users, Moon, Sun, Menu, X, Sparkles, CheckCircle, User } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getActiveSender } from '../api';
 
 const Navigation: React.FC = () => {
@@ -12,6 +12,18 @@ const Navigation: React.FC = () => {
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [activeSender, setActiveSender] = useState<{ name: string; email: string } | null>(null);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -122,23 +134,55 @@ const Navigation: React.FC = () => {
               </motion.button>
 
               <div className="hidden sm:flex items-center gap-3">
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800">
-                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold">
-                    {user.name.charAt(0).toUpperCase()}
-                  </div>
-                  <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                    {user.name}
-                  </span>
+                <div className="relative" ref={dropdownRef}>
+                  <motion.button
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setDropdownOpen(!dropdownOpen)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 transition-colors border border-slate-200/20 dark:border-slate-700/20"
+                    aria-haspopup="true"
+                    aria-expanded={dropdownOpen}
+                  >
+                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white text-xs font-bold">
+                      {user.name.charAt(0).toUpperCase()}
+                    </div>
+                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                      {user.name}
+                    </span>
+                    <span className="text-[10px] text-slate-400 dark:text-slate-500">▼</span>
+                  </motion.button>
+
+                  <AnimatePresence>
+                    {dropdownOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                        transition={{ duration: 0.15 }}
+                        className="absolute right-0 mt-2 w-48 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200/50 dark:border-slate-800/50 shadow-2xl backdrop-blur-md py-1.5 z-50 overflow-hidden"
+                      >
+                        <Link
+                          to="/profile-settings"
+                          onClick={() => setDropdownOpen(false)}
+                          className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors font-medium"
+                        >
+                          <User size={15} className="text-indigo-500" />
+                          My Profile
+                        </Link>
+                        <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
+                        <button
+                          onClick={() => {
+                            setDropdownOpen(false);
+                            logout();
+                          }}
+                          className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/20 transition-colors font-medium text-left"
+                        >
+                          <LogOut size={15} />
+                          Logout
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={logout}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-xl transition-colors"
-                >
-                  <LogOut size={15} />
-                  <span className="hidden sm:inline">Logout</span>
-                </motion.button>
               </div>
 
               <button
@@ -186,10 +230,18 @@ const Navigation: React.FC = () => {
                   </Link>
                 );
               })}
-              <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+              <div className="pt-2 border-t border-slate-200 dark:border-slate-700 space-y-1">
+                <Link
+                  to="/profile-settings"
+                  onClick={() => setMobileOpen(false)}
+                  className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                >
+                  <User size={18} className="text-indigo-500" />
+                  My Profile
+                </Link>
                 <button
                   onClick={() => { logout(); setMobileOpen(false); }}
-                  className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 w-full"
+                  className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 w-full text-left"
                 >
                   <LogOut size={18} />
                   Logout

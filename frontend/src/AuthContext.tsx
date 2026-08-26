@@ -8,6 +8,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   acceptTerms: () => void;
+  updateUser: (data: Partial<User>) => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -54,6 +55,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         id: res.data.user_id,
         name: res.data.name,
         email: res.data.email,
+        phone: res.data.phone || '',
         role: res.data.role,
         has_accepted_terms: hasAcceptedTerms,
       };
@@ -78,8 +80,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   }, []);
 
+  const updateUser = useCallback((data: Partial<User>) => {
+    setUser((prev) => {
+      if (!prev) return null;
+      const updated = { ...prev, ...data };
+      localStorage.setItem('user', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, acceptTerms }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, acceptTerms, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

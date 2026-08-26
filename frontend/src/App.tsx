@@ -10,6 +10,8 @@ import SendersPage from './pages/SendersPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import TermsAndPoliciesModal from './components/TermsAndPoliciesModal';
+import ProfileSettingsPage from './pages/ProfileSettingsPage';
+import ConfirmCredentialChangePage from './pages/ConfirmCredentialChangePage';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
@@ -36,6 +38,8 @@ const AppRoutes: React.FC = () => {
           <Route path="/senders" element={<ProtectedRoute><SendersPage /></ProtectedRoute>} />
           {/* /settings reuses SendersPage, which now also hosts the Gmail connect card */}
           <Route path="/settings" element={<ProtectedRoute><SendersPage /></ProtectedRoute>} />
+          <Route path="/profile-settings" element={<ProtectedRoute><ProfileSettingsPage /></ProtectedRoute>} />
+          <Route path="/confirm-credential-change" element={<ConfirmCredentialChangePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

@@ -136,6 +136,10 @@ from app.database import (
     update_user_password,
     get_user_consent,
     save_user_consent,
+    update_user_profile,
+    update_user_pending_credential_change,
+    get_user_by_credential_change_token,
+    confirm_user_credential_change,
 )
 from app.auth_google import get_auth_url, get_flow, fetch_tokens, get_user_info, verify_state
 from app.gmail_service import send_email_gmail
@@ -2763,6 +2767,176 @@ def accept_consent():
     }
 
 
+class UpdateProfileRequest(BaseModel):
+    name: str
+    phone: str
+
+class RequestCredentialChangeRequest(BaseModel):
+    type: str # "email" or "password"
+    value: str
+
+class ConfirmCredentialChangeRequest(BaseModel):
+    token: str
+
+@app.put("/api/user/update-profile")
+def api_update_profile(payload: UpdateProfileRequest):
+    current_user = state.get("current_user")
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    name = payload.name.strip()
+    phone = payload.phone.strip()
+    
+    if not name:
+        raise HTTPException(status_code=400, detail="Name cannot be empty.")
+        
+    if not re.match(r"^\d{10}$", phone):
+        raise HTTPException(status_code=400, detail="Phone number must be exactly 10 digits.")
+        
+    update_user_profile(current_user["id"], name, phone)
+    
+    current_user["name"] = name
+    current_user["phone"] = phone
+    state["current_user"] = current_user
+    
+    return {
+        "success": True, 
+        "user": {
+            "id": current_user["id"],
+            "name": name,
+            "email": current_user["email"],
+            "phone": phone,
+            "role": current_user["role"],
+            "has_accepted_terms": current_user.get("has_accepted_terms", False)
+        }
+    }
+
+@app.post("/api/user/request-credential-change")
+def api_request_credential_change(payload: RequestCredentialChangeRequest):
+    current_user = state.get("current_user")
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    change_type = payload.type.strip().lower()
+    value = payload.value.strip()
+    
+    if change_type not in ("email", "password"):
+        raise HTTPException(status_code=400, detail="Invalid credential change type.")
+        
+    pending_email = None
+    pending_password_hash = None
+    
+    if change_type == "email":
+        new_email = value.lower()
+        if not re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", new_email):
+            raise HTTPException(status_code=400, detail="Invalid email format.")
+            
+        if new_email == current_user["email"].lower():
+            raise HTTPException(status_code=400, detail="New email must be different from current email.")
+            
+        if current_user.get("role") == "organization":
+            if is_personal_email_domain(new_email):
+                raise HTTPException(status_code=400, detail="Organizational accounts must use a custom business email domain.")
+                
+        if get_user_by_email(new_email):
+            raise HTTPException(status_code=400, detail="This email address is already in use by another account.")
+            
+        pending_email = new_email
+    else:
+        # password
+        if len(value) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+        pending_password_hash = hash_password(value)
+        
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    expires_iso = expires_at.isoformat()
+    
+    # Save/replace pending change
+    update_user_pending_credential_change(
+        email=current_user["email"],
+        token=token,
+        expires_iso=expires_iso,
+        change_type=change_type,
+        pending_email=pending_email,
+        pending_password_hash=pending_password_hash
+    )
+    
+    # Send confirmation email to original/current address
+    smtp_settings = load_smtp_settings()
+    confirm_link = f"http://localhost:5173/confirm-credential-change?token={token}"
+    email_body = (
+        f"Hello {current_user['name']},\n\n"
+        f"You requested to change your {change_type} for your Mail X account.\n"
+        f"Please click the link below to confirm this change:\n\n"
+        f"{confirm_link}\n\n"
+        f"This link is valid for 1 hour. If you did not make this request, you can safely ignore this email.\n\n"
+        f"Best regards,\n"
+        f"Mail X Team"
+    )
+    
+    if smtp_settings:
+        try:
+            send_email_smtp(
+                to_addr=current_user["email"],
+                subject="Confirm Account Credential Change - Mail X",
+                body=email_body,
+                settings=smtp_settings
+            )
+        except Exception as e:
+            print(f"[ERROR] Failed to send credential confirmation email: {e}")
+            print(f"[DEVELOPMENT ONLY] Confirmation Link: {confirm_link}")
+    else:
+        print("[WARNING] SMTP not configured. Printing confirmation link to terminal for development:")
+        print(f"[DEVELOPMENT ONLY] Confirmation Link: {confirm_link}")
+        
+    return {"success": True, "message": "A confirmation link has been sent to your current registered email."}
+
+@app.post("/api/user/confirm-credential-change")
+def api_confirm_credential_change(payload: ConfirmCredentialChangeRequest):
+    token = payload.token.strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Token is required.")
+        
+    user = get_user_by_credential_change_token(token)
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token.")
+        
+    expires_str = user.get("credential_change_expires")
+    if not expires_str:
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token.")
+        
+    try:
+        expires_at = datetime.fromisoformat(expires_str)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token.")
+        
+    if datetime.now(timezone.utc) > expires_at:
+        # Clear token if expired
+        update_user_pending_credential_change(user["email"], None, None, None, None, None)
+        raise HTTPException(status_code=400, detail="Invalid or expired confirmation token.")
+        
+    change_type = user.get("credential_change_type")
+    
+    if change_type == "email":
+        new_val = user.get("pending_email")
+        if not new_val:
+            raise HTTPException(status_code=400, detail="Invalid pending state.")
+    elif change_type == "password":
+        new_val = user.get("pending_password_hash")
+        if not new_val:
+            raise HTTPException(status_code=400, detail="Invalid pending state.")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid pending state.")
+        
+    confirm_user_credential_change(user["email"], change_type, new_val)
+    
+    # Invalidate session immediately
+    state["current_user"] = None
+    
+    return {"success": True, "message": "Credential changed successfully. Please log in again."}
+
+
 # ════════════════════════════════════════════
 # AUTH ENDPOINTS (from AI_Email-shravani)
 # ════════════════════════════════════════════
@@ -2894,6 +3068,7 @@ def login(data: dict):
         "user_id": user["id"],
         "name": user["name"],
         "email": user["email"],
+        "phone": user.get("phone", ""),
         "role": user["role"],
         "redirect": "/ai-agent" if user["role"] == "individual"
         else "/organization-dashboard"

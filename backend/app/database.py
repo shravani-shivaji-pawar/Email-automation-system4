@@ -108,6 +108,16 @@ def init_db():
             cursor.execute("ALTER TABLE users ADD COLUMN reset_token TEXT")
         if "reset_token_expires" not in cols:
             cursor.execute("ALTER TABLE users ADD COLUMN reset_token_expires TEXT")
+        if "credential_change_token" not in cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN credential_change_token TEXT")
+        if "credential_change_expires" not in cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN credential_change_expires TEXT")
+        if "credential_change_type" not in cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN credential_change_type TEXT")
+        if "pending_email" not in cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN pending_email TEXT")
+        if "pending_password_hash" not in cols:
+            cursor.execute("ALTER TABLE users ADD COLUMN pending_password_hash TEXT")
 
 
 
@@ -169,6 +179,11 @@ def get_user_by_email(email):
             "domain": row["domain"] if "domain" in row_keys else None,
             "reset_token": row["reset_token"] if "reset_token" in row_keys else None,
             "reset_token_expires": row["reset_token_expires"] if "reset_token_expires" in row_keys else None,
+            "credential_change_token": row["credential_change_token"] if "credential_change_token" in row_keys else None,
+            "credential_change_expires": row["credential_change_expires"] if "credential_change_expires" in row_keys else None,
+            "credential_change_type": row["credential_change_type"] if "credential_change_type" in row_keys else None,
+            "pending_email": row["pending_email"] if "pending_email" in row_keys else None,
+            "pending_password_hash": row["pending_password_hash"] if "pending_password_hash" in row_keys else None,
         }
     return None
 
@@ -195,6 +210,42 @@ def get_user_by_reset_token(token: str):
             "domain": row["domain"] if "domain" in row_keys else None,
             "reset_token": row["reset_token"] if "reset_token" in row_keys else None,
             "reset_token_expires": row["reset_token_expires"] if "reset_token_expires" in row_keys else None,
+            "credential_change_token": row["credential_change_token"] if "credential_change_token" in row_keys else None,
+            "credential_change_expires": row["credential_change_expires"] if "credential_change_expires" in row_keys else None,
+            "credential_change_type": row["credential_change_type"] if "credential_change_type" in row_keys else None,
+            "pending_email": row["pending_email"] if "pending_email" in row_keys else None,
+            "pending_password_hash": row["pending_password_hash"] if "pending_password_hash" in row_keys else None,
+        }
+    return None
+
+
+# =========================
+# GET USER BY CREDENTIAL CHANGE TOKEN
+# =========================
+def get_user_by_credential_change_token(token: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE credential_change_token = ?", (token,))
+        row = cursor.fetchone()
+
+    if row:
+        row_keys = row.keys()
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "email": row["email"],
+            "phone": row["phone"],
+            "password": row["password"],
+            "role": row["role"],
+            "app_password": row["app_password"] if "app_password" in row_keys else None,
+            "domain": row["domain"] if "domain" in row_keys else None,
+            "reset_token": row["reset_token"] if "reset_token" in row_keys else None,
+            "reset_token_expires": row["reset_token_expires"] if "reset_token_expires" in row_keys else None,
+            "credential_change_token": row["credential_change_token"] if "credential_change_token" in row_keys else None,
+            "credential_change_expires": row["credential_change_expires"] if "credential_change_expires" in row_keys else None,
+            "credential_change_type": row["credential_change_type"] if "credential_change_type" in row_keys else None,
+            "pending_email": row["pending_email"] if "pending_email" in row_keys else None,
+            "pending_password_hash": row["pending_password_hash"] if "pending_password_hash" in row_keys else None,
         }
     return None
 
@@ -221,6 +272,89 @@ def update_user_password(email: str, hashed_password: str):
             "UPDATE users SET password = ? WHERE email = ?",
             (hashed_password, email),
         )
+
+
+# =========================
+# UPDATE USER PROFILE
+# =========================
+def update_user_profile(user_id: int, name: str, phone: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET name = ?, phone = ? WHERE id = ?",
+            (name, phone, user_id),
+        )
+
+
+# =========================
+# UPDATE USER PENDING CREDENTIAL CHANGE
+# =========================
+def update_user_pending_credential_change(email: str, token: str | None, expires_iso: str | None, change_type: str | None, pending_email: str | None, pending_password_hash: str | None):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE users SET 
+                credential_change_token = ?, 
+                credential_change_expires = ?, 
+                credential_change_type = ?, 
+                pending_email = ?, 
+                pending_password_hash = ? 
+               WHERE email = ?""",
+            (token, expires_iso, change_type, pending_email, pending_password_hash, email),
+        )
+
+
+# =========================
+# CONFIRM USER CREDENTIAL CHANGE
+# =========================
+def confirm_user_credential_change(email: str, change_type: str, new_value: str):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if change_type == "email":
+            # Check if domain needs to be updated (if organizational user)
+            cursor.execute("SELECT role FROM users WHERE email = ?", (email,))
+            role_row = cursor.fetchone()
+            role = role_row[0] if role_row else None
+            
+            if role == "organization":
+                # extract new domain
+                new_domain = new_value.strip().lower().split("@", 1)[1]
+                cursor.execute(
+                    """UPDATE users SET 
+                        email = ?, 
+                        domain = ?, 
+                        credential_change_token = NULL, 
+                        credential_change_expires = NULL, 
+                        credential_change_type = NULL, 
+                        pending_email = NULL, 
+                        pending_password_hash = NULL 
+                       WHERE email = ?""",
+                    (new_value, new_domain, email)
+                )
+            else:
+                cursor.execute(
+                    """UPDATE users SET 
+                        email = ?, 
+                        credential_change_token = NULL, 
+                        credential_change_expires = NULL, 
+                        credential_change_type = NULL, 
+                        pending_email = NULL, 
+                        pending_password_hash = NULL 
+                       WHERE email = ?""",
+                    (new_value, email)
+                )
+        elif change_type == "password":
+            cursor.execute(
+                """UPDATE users SET 
+                    password = ?, 
+                    credential_change_token = NULL, 
+                    credential_change_expires = NULL, 
+                    credential_change_type = NULL, 
+                    pending_email = NULL, 
+                    pending_password_hash = NULL 
+                   WHERE email = ?""",
+                (new_value, email)
+            )
 
 
 # =========================
