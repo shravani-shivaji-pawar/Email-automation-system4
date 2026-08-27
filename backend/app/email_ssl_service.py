@@ -25,9 +25,10 @@ def load_smtp_settings() -> SMTPSettings | None:
     if not host or not from_addr:
         return None
 
-    port = 465
+    port = int(os.getenv("SMTP_PORT", "465"))
     user = os.getenv("SMTP_USER", "").strip() or None
     password = os.getenv("SMTP_PASSWORD", "").strip() or None
+    use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in ("1", "true", "yes")
 
     return SMTPSettings(
         host=host,
@@ -35,7 +36,7 @@ def load_smtp_settings() -> SMTPSettings | None:
         user=user,
         password=password,
         from_addr=from_addr,
-        use_tls=True,
+        use_tls=use_tls,
     )
 
 

@@ -160,6 +160,7 @@ _default_cors_origins = "http://localhost:5173,https://emailsystem2.vercel.app,h
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.getenv("CORS_ORIGINS", _default_cors_origins).split(","),
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -2655,7 +2656,7 @@ class ResetPasswordRequest(BaseModel):
     new_password: str
 
 @app.post("/api/forgot-password")
-def forgot_password(payload: ForgotPasswordRequest):
+def forgot_password(payload: ForgotPasswordRequest, request: Request):
     email = payload.email.strip().lower()
     user = get_user_by_email(email)
     
@@ -2672,7 +2673,18 @@ def forgot_password(payload: ForgotPasswordRequest):
     
     update_user_reset_token(email, token, expires_at_iso)
     
-    reset_link = f"{FRONTEND_URL}/reset-password?token={token}"
+    # Dynamically determine the frontend URL from the request origin/referer
+    origin = request.headers.get("origin")
+    if not origin:
+        referer = request.headers.get("referer")
+        if referer:
+            from urllib.parse import urlparse
+            parsed = urlparse(referer)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+    if not origin:
+        origin = FRONTEND_URL
+        
+    reset_link = f"{origin}/reset-password?token={token}"
     
     smtp_settings = load_smtp_settings()
     if smtp_settings:
@@ -2812,7 +2824,7 @@ def api_update_profile(payload: UpdateProfileRequest):
     }
 
 @app.post("/api/user/request-credential-change")
-def api_request_credential_change(payload: RequestCredentialChangeRequest):
+def api_request_credential_change(payload: RequestCredentialChangeRequest, request: Request):
     current_user = state.get("current_user")
     if not current_user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -2862,9 +2874,20 @@ def api_request_credential_change(payload: RequestCredentialChangeRequest):
         pending_password_hash=pending_password_hash
     )
     
+    # Dynamically determine the frontend URL from the request origin/referer
+    origin = request.headers.get("origin")
+    if not origin:
+        referer = request.headers.get("referer")
+        if referer:
+            from urllib.parse import urlparse
+            parsed = urlparse(referer)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+    if not origin:
+        origin = FRONTEND_URL
+        
     # Send confirmation email to original/current address
     smtp_settings = load_smtp_settings()
-    confirm_link = f"{FRONTEND_URL}/confirm-credential-change?token={token}"
+    confirm_link = f"{origin}/confirm-credential-change?token={token}"
     email_body = (
         f"Hello {current_user['name']},\n\n"
         f"You requested to change your {change_type} for your Mail X account.\n"
