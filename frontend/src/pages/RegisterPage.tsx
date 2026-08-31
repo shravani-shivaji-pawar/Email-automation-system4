@@ -64,7 +64,7 @@ const RegisterPage: React.FC = () => {
         name, email, phone, password, role,
       });
       // Automatically log the user in so they are authenticated
-      await login(email, password);
+      await login(email, password, false);
       navigate('/dashboard');
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Registration failed');

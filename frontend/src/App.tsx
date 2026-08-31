@@ -7,11 +7,7 @@ import DashboardPage from './pages/DashboardPage';
 import SendEmailsPage from './pages/SendEmailsPage';
 import AiAgentPage from './pages/AiAgentPage';
 import SendersPage from './pages/SendersPage';
-import ForgotPasswordPage from './pages/ForgotPasswordPage';
-import ResetPasswordPage from './pages/ResetPasswordPage';
 import TermsAndPoliciesModal from './components/TermsAndPoliciesModal';
-import ProfileSettingsPage from './pages/ProfileSettingsPage';
-import ConfirmCredentialChangePage from './pages/ConfirmCredentialChangePage';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
@@ -30,16 +26,12 @@ const AppRoutes: React.FC = () => {
         <Routes>
           <Route path="/" element={user ? <Navigate to="/dashboard" replace /> : <LoginPage />} />
           <Route path="/register" element={user ? <Navigate to="/dashboard" replace /> : <RegisterPage />} />
-          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/send-emails" element={<ProtectedRoute><SendEmailsPage /></ProtectedRoute>} />
           <Route path="/ai-agent" element={<ProtectedRoute><AiAgentPage /></ProtectedRoute>} />
           <Route path="/senders" element={<ProtectedRoute><SendersPage /></ProtectedRoute>} />
           {/* /settings reuses SendersPage, which now also hosts the Gmail connect card */}
           <Route path="/settings" element={<ProtectedRoute><SendersPage /></ProtectedRoute>} />
-          <Route path="/profile-settings" element={<ProtectedRoute><ProfileSettingsPage /></ProtectedRoute>} />
-          <Route path="/confirm-credential-change" element={<ConfirmCredentialChangePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

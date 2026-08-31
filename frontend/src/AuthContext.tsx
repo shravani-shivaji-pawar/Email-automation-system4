@@ -5,7 +5,7 @@ import { login as apiLogin, getConsentStatus } from './api';
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, rememberMe: boolean) => Promise<void>;
   logout: () => void;
   acceptTerms: () => void;
   updateUser: (data: Partial<User>) => void;
@@ -15,8 +15,11 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(() => {
-    const stored = localStorage.getItem('user');
-    return stored ? JSON.parse(stored) : null;
+    const storedLocal = localStorage.getItem('user');
+    if (storedLocal) return JSON.parse(storedLocal);
+    const storedSession = sessionStorage.getItem('user');
+    if (storedSession) return JSON.parse(storedSession);
+    return null;
   });
   const [loading, setLoading] = useState(false);
 
@@ -29,7 +32,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             has_accepted_terms: res.data.has_accepted,
           };
           setUser(updated);
-          localStorage.setItem('user', JSON.stringify(updated));
+          if (localStorage.getItem('user') || localStorage.getItem('remember_me') === 'true') {
+            localStorage.setItem('user', JSON.stringify(updated));
+          } else {
+            sessionStorage.setItem('user', JSON.stringify(updated));
+          }
         })
         .catch((err) => {
           console.error('Failed to sync consent status on mount:', err);
@@ -37,7 +44,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string, rememberMe: boolean) => {
     setLoading(true);
     try {
       const res = await apiLogin({ email, password });
@@ -60,7 +67,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         has_accepted_terms: hasAcceptedTerms,
       };
       setUser(userData);
-      localStorage.setItem('user', JSON.stringify(userData));
+      if (rememberMe) {
+        localStorage.setItem('user', JSON.stringify(userData));
+        localStorage.setItem('remember_me', 'true');
+        sessionStorage.removeItem('user');
+      } else {
+        sessionStorage.setItem('user', JSON.stringify(userData));
+        localStorage.removeItem('user');
+        localStorage.removeItem('remember_me');
+      }
     } finally {
       setLoading(false);
     }
@@ -69,13 +84,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = useCallback(() => {
     setUser(null);
     localStorage.removeItem('user');
+    localStorage.removeItem('remember_me');
+    sessionStorage.removeItem('user');
   }, []);
 
   const acceptTerms = useCallback(() => {
     setUser((prev) => {
       if (!prev) return null;
       const updated = { ...prev, has_accepted_terms: true };
-      localStorage.setItem('user', JSON.stringify(updated));
+      if (localStorage.getItem('user') || localStorage.getItem('remember_me') === 'true') {
+        localStorage.setItem('user', JSON.stringify(updated));
+      } else {
+        sessionStorage.setItem('user', JSON.stringify(updated));
+      }
       return updated;
     });
   }, []);
@@ -84,7 +105,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser((prev) => {
       if (!prev) return null;
       const updated = { ...prev, ...data };
-      localStorage.setItem('user', JSON.stringify(updated));
+      if (localStorage.getItem('user') || localStorage.getItem('remember_me') === 'true') {
+        localStorage.setItem('user', JSON.stringify(updated));
+      } else {
+        sessionStorage.setItem('user', JSON.stringify(updated));
+      }
       return updated;
     });
   }, []);

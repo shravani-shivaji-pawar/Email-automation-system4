@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
-import { Mail, Send, Bot, LogOut, Users, Moon, Sun, Menu, X, Sparkles, CheckCircle, User } from 'lucide-react';
+import { Mail, Send, Bot, LogOut, Users, Moon, Sun, Menu, X, Sparkles, CheckCircle } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -160,15 +160,7 @@ const Navigation: React.FC = () => {
                         transition={{ duration: 0.15 }}
                         className="absolute right-0 mt-2 w-48 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200/50 dark:border-slate-800/50 shadow-2xl backdrop-blur-md py-1.5 z-50 overflow-hidden"
                       >
-                        <Link
-                          to="/profile-settings"
-                          onClick={() => setDropdownOpen(false)}
-                          className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors font-medium"
-                        >
-                          <User size={15} className="text-indigo-500" />
-                          My Profile
-                        </Link>
-                        <div className="border-t border-slate-100 dark:border-slate-800 my-1" />
+
                         <button
                           onClick={() => {
                             setDropdownOpen(false);
@@ -231,14 +223,7 @@ const Navigation: React.FC = () => {
                 );
               })}
               <div className="pt-2 border-t border-slate-200 dark:border-slate-700 space-y-1">
-                <Link
-                  to="/profile-settings"
-                  onClick={() => setMobileOpen(false)}
-                  className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50"
-                >
-                  <User size={18} className="text-indigo-500" />
-                  My Profile
-                </Link>
+
                 <button
                   onClick={() => { logout(); setMobileOpen(false); }}
                   className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 w-full text-left"
